@@ -3,7 +3,10 @@
 const G = window.GAME;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const params = new URLSearchParams(location.search);
-const IS_HOST = params.has("host");
+const DEMO = params.get("demo");            // "gm" oppure "giocatore": simulazione senza salvare nulla
+const DUO = DEMO === "giocatore";
+const SPEED = Math.max(1, +params.get("speed") || 1); // solo per i test              // telefono + schermo del Game Master affiancati
+const IS_HOST = params.has("host") || DEMO === "gm";
 let CODE = (params.get("r") || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 const app = document.getElementById("app");
 const rnd = n => Math.floor(Math.random() * n);
@@ -19,6 +22,7 @@ function shuffle(a, seed) {
 const Store = {
   uid: null, mock: false, listeners: [],
   async init() {
+    if (DEMO) { this.mock = true; this.memory = true; this.mem = {}; this.uid = DEMO === "gm" ? "gm" : "me"; return; }
     const cfg = window.FIREBASE_CONFIG || {};
     if (cfg.apiKey && window.firebase) {
       firebase.initializeApp(cfg);
@@ -45,14 +49,15 @@ const Store = {
     this.bc.onmessage = () => this.fire();
     window.addEventListener("storage", e => { if (e.key === "ip-mock") this.fire(); });
   },
-  _data() { try { return JSON.parse(localStorage.getItem("ip-mock") || "{}"); } catch (e) { return {}; } },
+  _save(d) { if (this.memory) { this.mem = d; } else { localStorage.setItem("ip-mock", JSON.stringify(d)); this.bc.postMessage(1); } this.fire(); },
+  _data() { if (this.memory) return this.mem; try { return JSON.parse(localStorage.getItem("ip-mock") || "{}"); } catch (e) { return {}; } },
   _get(d, path) { return path.split("/").reduce((o, k) => (o == null ? undefined : o[k]), d); },
   _set(d, path, v) {
     const ks = path.split("/"); let o = d;
     for (let i = 0; i < ks.length - 1; i++) { if (typeof o[ks[i]] !== "object" || o[ks[i]] === null) o[ks[i]] = {}; o = o[ks[i]]; }
     if (v === null || v === undefined) delete o[ks[ks.length - 1]]; else o[ks[ks.length - 1]] = JSON.parse(JSON.stringify(v));
   },
-  fire() { const d = this._data(); this.listeners.forEach(l => l.cb(this._get(d, l.path) ?? null)); },
+  fire() { const d = this.memory ? JSON.parse(JSON.stringify(this.mem)) : this._data(); this.listeners.forEach(l => l.cb(this._get(d, l.path) ?? null)); },
   on(path, cb) {
     if (!this.mock) {
       const ref = this.db.ref(path);
@@ -61,17 +66,17 @@ const Store = {
       return () => ref.off("value", h);
     }
     const l = { path, cb }; this.listeners.push(l);
-    setTimeout(() => cb(this._get(this._data(), path) ?? null), 0);
+    setTimeout(() => { const d = this.memory ? JSON.parse(JSON.stringify(this.mem)) : this._data(); cb(this._get(d, path) ?? null); }, 0);
     return () => { this.listeners = this.listeners.filter(x => x !== l); };
   },
   set(path, v) {
     if (!this.mock) return this.db.ref(path).set(v);
-    const d = this._data(); this._set(d, path, v); localStorage.setItem("ip-mock", JSON.stringify(d)); this.bc.postMessage(1); this.fire(); return Promise.resolve();
+    const d = this._data(); this._set(d, path, v); this._save(d); return Promise.resolve();
   },
   update(path, obj) {
     if (!this.mock) return this.db.ref(path).update(obj);
     const d = this._data(); Object.entries(obj).forEach(([k, v]) => this._set(d, path + "/" + k, v));
-    localStorage.setItem("ip-mock", JSON.stringify(d)); this.bc.postMessage(1); this.fire(); return Promise.resolve();
+    this._save(d); return Promise.resolve();
   },
   get(path) {
     if (!this.mock) return this.db.ref(path).get().then(s => s.val());
@@ -535,7 +540,7 @@ function renderHost() {
   const views = { lobby: hostLobby, briefing: hostBriefing, patto: hostPatto, chi: hostChi, wyr: () => hostDilemma(false), lampo: () => hostDilemma(true), punti: hostPunti, budget: hostBudget, missioni: hostMissioni, dna: hostDNA };
   return `<div class="host">
     <header class="hbar"><div class="brand">${esc(G.titolo)} <span>· Serata 1 · ${esc(G.serate[0].titolo)}</span></div><div class="phase">${esc(STEP_NAMES[s.step] || "")}</div>
-      <div class="room">${Store.mock ? '<span class="mock">modalità prova</span>' : ""}<span>Stanza <b>${CODE}</b></span><span>${nPlayers()} 👤</span><button class="mini" data-act="fullscreen" title="Schermo intero">⛶</button><button class="mini" data-act="newroom" title="Nuova stanza">⟲</button></div></header>
+      <div class="room">${DEMO ? '<span class="mock">simulazione · non si salva nulla</span>' : Store.mock ? '<span class="mock">modalità prova</span>' : ""}<span>Stanza <b>${CODE}</b></span><span>${nPlayers()} 👤</span><button class="mini" data-act="fullscreen" title="Schermo intero">⛶</button>${DEMO ? "" : '<button class="mini" data-act="newroom" title="Nuova stanza">⟲</button>'}</div></header>
     <main class="stage">${(views[s.step] || hostLobby)()}</main>
     <footer class="hfoot"><button class="btn ghost" data-act="back" ${ui.history.length ? "" : "disabled"}>← Indietro</button><div class="fx">${hostFooterExtra()}</div>
       ${s.step === "dna" ? "" : `<button class="btn aur big" data-act="next" ${canNext() ? "" : "disabled"}>${nextLabel()} →</button>`}</footer></div>`;
@@ -702,10 +707,86 @@ function downloadDNA() {
   }).catch(() => el.classList.remove("shot"));
 }
 
+
+// ============================ SIMULAZIONE: GIOCATORI FINTI ============================
+const Bots = {
+  nomi: ["Giulia", "Luca", "Marta", "Sara", "Tommi", "Ele"],
+  parole: ["Aurora", "Freddo", "Avventura", "Ghiaccio", "Libertà", "Magia", "Vento", "Aurora"],
+  follie: ["Fare il bagno in una pozza calda a -10°", "Assaggiare lo squalo fermentato senza fare facce", "Dormire nel furgone sotto l'aurora", "Imparare una canzone in islandese", "Cavalcare un cavallo islandese nella neve", "Toccare un iceberg sulla spiaggia nera"],
+  souvenir: ["Un elmo vichingo di plastica", "Una calamita a forma di pulcinella", "Un barattolo di aria islandese", "Un troll di legno", "Sale nero vulcanico", "Una felpa «I survived Iceland»"],
+  ids: [], done: new Set(), lean: {},
+  start() {
+    this.ids = this.nomi.map((_, i) => "bot" + (i + 1));
+    this.ids.forEach((id, i) => setTimeout(() => {
+      const taken = new Set(playerList().map(p => p.avatar));
+      const free = G.avatar.filter(a => !taken.has(a.id));
+      if (!free.length || P(id)) return;
+      Store.set(R(`pub/players/${id}`), { name: this.nomi[i], avatar: free[rnd(free.length)].id, joinedAt: Date.now() });
+    }, ((DUO ? 2500 : 1200) + i * (900 + Math.random() * 900)) / SPEED));
+  },
+  later(key, fn, min, max) {
+    if (this.done.has(key)) return; this.done.add(key);
+    setTimeout(() => { try { fn(); } catch (e) { console.warn(e); } }, (min + Math.random() * (max - min)) / SPEED);
+  },
+  ans(b, key, v) { return Store.set(R(`pub/ans/${key}/${b}`), v); },
+  pick(arr) { return arr[rnd(arr.length)]; },
+  tick() {
+    const s = st(); if (!s.step) return;
+    const joined = this.ids.filter(b => P(b));
+    joined.forEach((b, i) => {
+      const k = (x) => b + "|" + x;
+      if (s.step === "lobby") {
+        if (ans("parola")[b] === undefined) this.later(k("parola"), () => this.ans(b, "parola", this.pick(this.parole)), 1500, 5000);
+        if (ans("follia")[b] === undefined) this.later(k("follia"), () => this.ans(b, "follia", this.follie[i % this.follie.length]), 4000, 10000);
+      }
+      if (s.step === "patto" && !ans("patto")[b]) this.later(k("patto"), () => this.ans(b, "patto", Date.now()), 1500, 6000);
+      if (s.step === "chi" && s.sub === "guess" && !s.reveal) {
+        const author = s.list[s.k];
+        const others = playerList().map(p => p.id).filter(id => id !== b && id !== author);
+        this.later(k("chi" + author), () => this.ans(b, "chi_" + author, b !== author && Math.random() < 0.35 ? author : this.pick(others.length ? others : [author])), 2000, 7000);
+      }
+      if (s.step === "chi" && s.sub === "vote") this.later(k("fv"), () => this.ans(b, "follia_vote", this.pick(s.list)), 1500, 5000);
+      if ((s.step === "wyr" || s.step === "lampo") && s.sub === "play") {
+        const d = (s.step === "wyr" ? G.dilemmi : G.lampo)[s.k]; if (!d) return;
+        if (this.lean[d.id] === undefined) this.lean[d.id] = Math.random();
+        const L = this.lean[d.id]; const fast = s.step === "lampo";
+        const vote = () => Math.random() < 0.1 ? "T" : (Math.random() < L ? "A" : "B");
+        if (s.round === 2) { this.later(k("v2" + d.id), () => this.ans(b, "v_" + d.id + "_2", Math.random() < 0.5 + (L - 0.5) * 1.6 ? "A" : "B"), 1500, 5000); return; }
+        if (!fast) this.later(k("bet" + d.id), () => this.ans(b, "bet_" + d.id, Math.random() < L ? "A" : "B"), 1000, 4000);
+        this.later(k("v" + d.id), () => this.ans(b, "v_" + d.id, vote()), fast ? 1000 : 4000, fast ? 5000 : 11000);
+      }
+      if (s.step === "punti" && s.sub === "collect") this.later(k("punti"), () => {
+        const w = G.categorie.map(c => (c.id === "aurora" ? 3 : 0.3 + Math.random() * 1.7));
+        const a = Object.fromEntries(G.categorie.map(c => [c.id, 0]));
+        for (let n = 0; n < 20; n++) { let r = Math.random() * w.reduce((x, y) => x + y, 0), j = 0; while ((r -= w[j]) > 0) j++; a[G.categorie[j].id] += 5; }
+        this.ans(b, "punti", a);
+      }, 4000, 12000);
+      if (s.step === "budget" && s.sub === "collect") this.later(k("budget"), () => {
+        const comodo = 700 + rnd(9) * 50, max = comodo + 200 + rnd(7) * 50;
+        Store.set(R(`secret/${b}`), { budget: { comodo, max } });
+        const voci = shuffle(G.budget.voci); this.ans(b, "spese", { spend: voci.slice(0, 2), save: voci[2] });
+        this.ans(b, "souvenir", this.souvenir[i % this.souvenir.length]);
+      }, 4000, 12000);
+      if (s.step === "missioni" && s.sub === "draft") {
+        const dr = draft(); if (dr.done) return;
+        const pi = s.order[dr.turn]; const pair = (s.pairs || [])[pi] || [];
+        if (pair.includes(ME) || pair[0] !== b) return;
+        this.later(k("pick" + dr.turn), () => {
+          const d2 = draft(); const taken = new Set(Object.values(d2.assign));
+          const free = G.missioni.filter(m => !taken.has(m.id));
+          if (free.length) this.ans(b, "pick_" + pi, { m: this.pick(free).id, at: Date.now() });
+        }, 2500, 5000);
+      }
+    });
+  }
+};
+
 // ============================ RENDER ============================
 let lastHTML = "";
+let lastPhone = "";
 function render() {
-  const html = IS_HOST ? renderHost() : renderPhone();
+  if (DUO) lastPhone = renderPhone();
+  const html = DUO ? `<div class="duo"><div class="duo-host">${renderHost()}</div><div class="duo-phone"><div class="duo-label">Il tuo telefono</div><div class="phone-frame">${lastPhone}</div></div></div>` : IS_HOST ? renderHost() : renderPhone();
   if (html === lastHTML) return;
   const fid = document.activeElement && document.activeElement.id;
   const sel = fid && document.activeElement.selectionStart;
@@ -732,6 +813,7 @@ document.addEventListener("click", e => {
   const act = el.dataset.act;
   if (act === "host-start") { location.search = "?host"; return; }
   if (act === "code-go") { const c = (document.getElementById("f-code").value || "").toUpperCase().trim(); if (c) location.search = "?r=" + c; return; }
+  if (DUO) return el.closest(".duo-host") ? hostAction(act, el) : phoneAction(act, el);
   IS_HOST ? hostAction(act, el) : phoneAction(act, el);
 });
 document.addEventListener("input", e => {
@@ -739,16 +821,17 @@ document.addEventListener("input", e => {
   const k = id.slice(2); ui.drafts[k] = e.target.value;
   if (!IS_HOST) {
     const html = renderPhone();
-    if (html !== lastHTML) { // aggiorna solo i pulsanti senza perdere il focus
+    const root = DUO ? document.querySelector(".phone-frame") : document;
+    if (html !== (DUO ? lastPhone : lastHTML)) { // aggiorna solo i pulsanti senza perdere il focus
       const tmp = document.createElement("div"); tmp.innerHTML = html;
-      document.querySelectorAll("button[data-act]").forEach((b, i) => { const nb = tmp.querySelectorAll("button[data-act]")[i]; if (nb) b.disabled = nb.disabled; });
-      const w = document.querySelector(".warn"), nw = tmp.querySelector(".warn");
+      root.querySelectorAll("button[data-act]").forEach((b, i) => { const nb = tmp.querySelectorAll("button[data-act]")[i]; if (nb) b.disabled = nb.disabled; });
+      const w = root.querySelector(".warn"), nw = tmp.querySelector(".warn");
       if (!!w !== !!nw) { lastHTML = ""; render(); }
     }
   }
 });
 document.addEventListener("keydown", e => {
-  if (!IS_HOST || e.target.tagName === "INPUT") return;
+  if ((!IS_HOST && !DUO) || ["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
   if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); next(); }
   if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); back(); }
 });
@@ -756,17 +839,30 @@ document.addEventListener("keydown", e => {
 function landing() {
   app.innerHTML = `<div class="landing"><img class="lg-av" src="assets/pulcinella.png" alt=""><h1 class="ptitle">${esc(G.titolo)}</h1>
     <p class="muted">Inserisci il codice della stanza</p><input class="inp code-in" id="f-code" maxlength="6" autocomplete="off" placeholder="CODICE">
-    <button class="btn aur full" data-act="code-go">Entra</button><button class="btn ghost full" data-act="host-start">Sono il Game Master</button></div>`;
+    <button class="btn aur full" data-act="code-go">Entra</button><button class="btn ghost full" data-act="host-start">Sono il Game Master</button>
+    <p class="muted" style="margin-top:1.4em">Simulazione (non salva nulla)</p>
+    <a class="btn ghost full" href="?demo=gm">Prova come Game Master</a><a class="btn ghost full" href="?demo=giocatore">Prova come giocatore</a></div>`;
 }
 
 // ============================ AVVIO ============================
 async function start() {
-  if (!IS_HOST && !CODE) return landing();
+  if (!IS_HOST && !CODE && !DEMO) return landing();
   try { await Store.init(); } catch (e) {
     app.innerHTML = `<div class="center-msg"><div>Non riesco a collegarmi.<br><br><small class="muted">Controlla la connessione. Se usi un blocco pubblicità o una VPN, prova a disattivarli per questa pagina.</small><br><br><button class="btn aur" onclick="location.reload()">Riprova</button><br><br><small class="muted" style="font-size:.7em">${esc(e.code || e.message || e)}</small></div></div>`;
     return;
   }
   ME = Store.uid;
+  if (DEMO) {
+    document.documentElement.classList.add(DUO ? "is-duo" : "is-host");
+    CODE = "DEMO";
+    await Store.set(R("host"), ME);
+    await Store.set(R("pub/state"), { step: "lobby", sub: 0, k: 0, t0: Date.now() });
+    Store.on(R("secret"), v => { SECRET = v || {}; render(); });
+    Store.on(R("pub"), v => { S = v || {}; S.state = S.state || {}; S._loaded = true; render(); Bots.tick(); });
+    Bots.start();
+    render(); tick();
+    return;
+  }
   if (IS_HOST) {
     document.documentElement.classList.add("is-host");
     CODE = localStorage.getItem("ip-host-code") || "";

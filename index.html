@@ -215,13 +215,29 @@ html.is-phone body{background:linear-gradient(180deg,#232c3b,var(--bg) 40%)}
 .chips{display:flex;flex-wrap:wrap;gap:.45em}
 .chip{padding:.5em .85em;border-radius:99px;background:var(--slate);font-size:.92em;border:2px solid transparent}
 .chip.sel{border-color:var(--aur);background:rgba(75,227,160,.15)}.chip.save.sel{border-color:var(--orange);background:rgba(242,107,58,.15)}
-.phone .tile.mcard{font-size:1rem}.phone .mcard .ico.sm{width:3.6em}.phone .mhead b{font-size:1.3em}.phone .mobj{font-size:1.08em}.phone .mcard .kicker{font-size:.8em}
+.phone .tile.mcard{font-size:16px}.phone .mcard .ico.sm{width:3.6em}.phone .mhead b{font-size:1.3em}.phone .mobj{font-size:1.08em}.phone .mcard .kicker{font-size:.8em}
 .phone .mcard .pav.small .av{width:2.6em;height:2.6em}.phone .mcard .pav.small span{font-size:.9em}
-.phone .dna{font-size:.62rem;padding:1.6em;border-radius:14px}
+.phone .dna{font-size:10px;padding:1.6em;border-radius:14px}
 .phone .dna-g{grid-template-columns:1fr}
 .phone .dna-h{flex-direction:column;align-items:flex-start}
 .phone .dna-h h1{font-size:4em}.phone .dbox{font-size:1.6em}.phone .prof{display:flex;flex-direction:column;gap:.5em}.phone .pf{font-size:1.4em;display:flex;gap:.5em}.phone .pf .slider{display:none}.phone .pf:has(.w) span:not(.w){display:none}.phone .pf .w::before{content:"✓ ";color:var(--aur)}.phone .pf:not(:has(.w)) .pa::after{content:"  o";color:var(--mute)}.phone .pf .pa{text-align:left}
 .phone .dna-av .av{width:4em;height:4em}
+
+/* ================= SIMULAZIONE GIOCATORE (telefono + schermo) ================= */
+html.is-duo{font-size:min(calc((100vw - 470px) / 120), calc((100vh - 24px) / 67.5))}
+html.is-duo body{overflow:hidden}
+.duo{display:flex;gap:20px;height:100vh;align-items:center;justify-content:center;padding:12px}
+.duo-host{width:120rem;height:67.5rem;flex:none;border-radius:14px;overflow:hidden;box-shadow:0 0 0 2px var(--slate),0 20px 50px rgba(0,0,0,.5)}
+.duo-host .host{height:100%}
+.duo-phone{flex:none;width:400px;height:calc(100vh - 24px);display:flex;flex-direction:column;gap:6px;font-size:16px}
+.duo-label{font-family:"Lilita One";color:var(--mute);text-align:center}
+.phone-frame{flex:1;border:10px solid #0b0f16;border-radius:38px;overflow:auto;background:linear-gradient(180deg,#232c3b,var(--bg) 40%);box-shadow:0 20px 50px rgba(0,0,0,.5)}
+.phone-frame .phone{min-height:100%}.phone-frame .watch{min-height:60vh}.phone-frame .center-msg{min-height:60vh}
+@media (max-width:900px){
+  html.is-duo{font-size:calc((100vw - 24px) / 120)} html.is-duo body{overflow:auto}
+  .duo{flex-direction:column;height:auto}.duo-phone{width:100%;height:85vh}
+}
+a.btn{text-decoration:none;color:inherit}
 </style>
 </head>
 <body>
