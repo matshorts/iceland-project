@@ -2,7 +2,7 @@
 "use strict";
 const DEFAULTS = JSON.parse(JSON.stringify(window.GAME));
 let G = JSON.parse(JSON.stringify(DEFAULTS));
-const EDITABLE = ["serate", "lobby", "esempi", "briefing", "patto", "dilemmi", "lampo", "categorie", "budget", "missioni", "scadenzaMissioni", "nomi"];
+const EDITABLE = ["serate", "lobby", "esempi", "briefing", "patto", "dilemmi", "lampo", "categorie", "avventura", "budget", "missioni", "scadenzaMissioni", "nomi"];
 const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
 let cfgKey = "";
 function applyCfg(c) {
@@ -171,6 +171,21 @@ function pres() {
   return { n, cats, top3, sacr, pass, passCat, nonSacr };
 }
 
+function ares() {
+  const all = {}; Object.entries(ans("avv")).forEach(([u, a]) => { if (P(u) && a) all[u] = a; });
+  const items = ((G.avventura || {}).domande || []).map(q => {
+    const vals = Object.entries(all).map(([u, a]) => ({ u, v: +a[q.id] })).filter(x => !isNaN(x.v)).sort((a, b) => a.v - b.v);
+    const arr = vals.map(x => x.v); const m = arr.length;
+    const med = m ? (m % 2 ? arr[(m - 1) / 2] : (arr[m / 2 - 1] + arr[m / 2]) / 2) : null;
+    return { ...q, vals, med, lo: m ? arr[0] : null, hi: m ? arr[m - 1] : null };
+  });
+  return { n: Object.keys(all).length, items, by: id => items.find(x => x.id === id) };
+}
+function avvLabel(q, v) {
+  if (v === null || v === undefined || isNaN(v)) return "—";
+  if (q.tipo === "scala") return (q.etichette || [])[Math.min(4, Math.max(0, Math.round(v) - 1))] || String(v);
+  return `${String(Math.round(v * 10) / 10).replace(".", ",")} ${q.unita || ""}`.trim();
+}
 function bres() {
   const vals = Object.entries(SECRET || {}).filter(([u]) => P(u)).map(([, s]) => s && s.budget).filter(Boolean);
   if (!vals.length) return null;
@@ -247,17 +262,24 @@ function missionCard(id) {
   const perc = d5.winner === "A" ? "con spostamenti quasi ogni notte" : d5.winner === "B" ? "con 2-3 basi fisse" : "una con basi fisse e una con spostamenti";
   return {
     obiettivo: "Scoprite cosa ci sta davvero in 6 giorni d'inverno, partendo da Keflavík.",
-    portate: ["Tempi di guida realistici verso le zone del sud", "Ore di luce a febbraio", "Dove e come si guarda l'aurora", `2 ipotesi di percorso, ${perc}`],
+    portate: ["Tempi di guida realistici verso le zone del sud", "Ore di luce a febbraio", "Dove e come si guarda l'aurora", `2 ipotesi di percorso, ${perc}`].concat(avvMission()),
     dove: "road.is (strade) · safetravel.is (avvisi) · vedur.is (meteo e aurora)", nota: ""
   };
 }
 
+function avvMission() {
+  const a = ares(); const e = a.by("escursioni"), o = a.by("ore");
+  if (!a.n || !e || !o || e.med === null) return [];
+  return [`Circa ${Math.round(e.med)} escursioni in tutto, con al massimo ${o.lo} ore a piedi al giorno (si va al passo del più tranquillo)`];
+}
 function nomeSpedizione(p) {
   const top = p.top3.map(c => c.id); const r = id => dres(id).winner; const b = st().budget;
   if (top.includes("aurora") && r("D9") === "A") return G.nomi.cacciatori;
   if (top.includes("aurora") && r("D6") === "A") return G.nomi.notturni;
+  const a = ares(), fat = a.by("fatica"), adr = a.by("adrenalina");
+  if (fat && adr && fat.med >= 4 && adr.med >= 4 && G.nomi.avventurieri) return G.nomi.avventurieri;
   if (top.includes("terme")) return G.nomi.terme;
-  if (r("D7") === "A" && r("D8") === "A") return G.nomi.mattinieri;
+  if (r("D7") === "A" && fat && fat.med >= 3) return G.nomi.mattinieri;
   if (b && b.obiettivo < 900 && r("D14") === "A") return G.nomi.lowcost;
   return G.nomi.comodi;
 }
@@ -268,13 +290,14 @@ function computeDNA() {
     top3: p.top3.map(c => c.id), nonSacr: p.nonSacr ? p.nonSacr.id : null, sacr: p.sacr.map(c => c.id),
     profilo: allDilemmi().map(d => { const x = dres(d.id); return { id: d.id, A: x.a, B: x.b, label: x.label, winner: x.winner }; }),
     follia: fw ? fw.testo : null,
+    avv: ares().items.filter(q => q.med !== null).map(q => ({ id: q.id, med: q.med, lo: q.lo })),
     missioni: Object.entries(dr.assign).map(([pi, m]) => ({ pair: (st().pairs || [])[pi] || [], m })),
     giocatori: playerList().map(p => p.id)
   };
 }
 
 // ============================ HOST: FLUSSO ============================
-const STEP_NAMES = { lobby: "Lobby", briefing: "Il briefing", patto: "Il patto", chi: "Chi l'ha detto?", wyr: "Would you rather", lampo: "Giro lampo", punti: "I 100 punti", budget: "Budget al buio", missioni: "Le missioni", dna: "Il Travel DNA" };
+const STEP_NAMES = { lobby: "Lobby", briefing: "Il briefing", patto: "Il patto", chi: "Chi l'ha detto?", wyr: "Would you rather", lampo: "Giro lampo", punti: "I 100 punti", avventura: "Il termometro", budget: "Budget al buio", missioni: "Le missioni", dna: "Il Travel DNA" };
 function setState(patch, push = true) {
   if (push) ui.history.push(JSON.stringify(st()));
   const ns = { ...st(), ...patch };
@@ -315,6 +338,9 @@ function next() {
       if (s.sub === "collect") return setState({ sub: "reveal", k: 1 });
       if (s.sub === "reveal") return s.k < G.categorie.length ? setState({ k: s.k + 1 }) : setState({ sub: "passione" });
       if (s.sub === "passione") return setState({ sub: "sintesi" });
+      return go("avventura", { sub: "collect" });
+    case "avventura":
+      if (s.sub === "collect") return setState({ sub: "reveal" });
       return go("budget", { sub: "collect" });
     case "budget":
       if (s.sub === "collect") return setState({ sub: "reveal", budget: bres() });
@@ -472,6 +498,22 @@ function hostPunti() {
     <div class="tile sbox"><div class="kicker">Da non sacrificare</div>${p.nonSacr ? `<div class="srow">${icon(p.nonSacr.id, "sm")}<b>${esc(p.nonSacr.nome)}</b></div><p class="muted">La passione di qualcuno, anche se è fuori dalla top 3.</p>` : '<p class="muted">La passione più forte è già in top 3.</p>'}</div>
     <div class="tile sbox"><div class="kicker">Qui si risparmia</div>${p.sacr.map(c => `<div class="srow dim">${icon(c.id, "sm")}<b>${esc(c.nome)}</b></div>`).join("")}</div></div></div>`;
 }
+function hostAvv() {
+  const s = st(); const A = G.avventura || { domande: [] };
+  if (s.sub === "collect") return `<div class="slide"><h1 class="title">${esc(A.titolo || "Il termometro dell'avventura")}</h1>
+    <p class="line">Quanto vogliamo muoverci? Cinque domande veloci: dal telefono scegli dove ti metti.</p>
+    <div class="avq">${A.domande.map((q, i) => `<div class="tile avq-i"><span class="hn">${i + 1}</span>${esc(q.domanda)}</div>`).join("")}</div>
+    ${progress(answered("avv"), nPlayers(), "hanno risposto")}${whoAnswered("avv")}</div>`;
+  const a = ares();
+  return `<div class="slide"><h1 class="title sm">L'identikit avventura</h1><div class="avr">${a.items.map(q => {
+    const mn = q.tipo === "scala" ? 1 : (+q.min || 0), mx = q.tipo === "scala" ? 5 : (+q.max || 6);
+    const range = Math.max(1, mx - mn); const seen = {};
+    const dots = q.vals.map(x => { const k = x.v; seen[k] = (seen[k] || 0) + 1; return `<span class="avd" style="left:${((x.v - mn) / range) * 100}%;bottom:${(seen[k] - 1) * 1.5}rem;z-index:${10 - seen[k]}">${av(x.u)}</span>`; }).join("");
+    return `<div class="avr-i"><div class="avr-q">${esc(q.domanda)}</div>
+      <div class="avr-t"><div class="avr-track">${q.med !== null ? `<i class="avr-med" style="left:${((q.med - mn) / range) * 100}%"></i>` : ""}${dots}</div>
+        <div class="avr-ends"><span>${esc(q.tipo === "scala" ? q.etichette[0] : mn + " " + (q.unita || ""))}</span><span>${esc(q.tipo === "scala" ? q.etichette[4] : mx + " " + (q.unita || ""))}</span></div></div>
+      <div class="avr-v"><b>${esc(avvLabel(q, q.med))}</b><small>il più tranquillo: ${esc(avvLabel(q, q.lo))}</small></div></div>`; }).join("")}</div></div>`;
+}
 function hostBudget() {
   const s = st();
   if (s.sub === "collect") return `<div class="slide"><h1 class="title">Budget al buio</h1>
@@ -534,8 +576,9 @@ function dnaHTML(d) {
         ${d.nonSacr ? `<div class="dc keep">${icon(d.nonSacr, "xs")}<span>Da non sacrificare: ${esc(cat(d.nonSacr)?.nome)}</span></div>` : ""}
         <div class="dc dim"><span>Qui si risparmia: ${d.sacr.map(id => esc(cat(id)?.nome)).join(", ")}</span></div></div>
       <div class="tile dbox">${d.follia ? `<div class="kicker">La follia scelta</div><p class="dfol">«${esc(d.follia)}»</p>` : ""}
-        <div class="kicker">Questioni aperte</div>${aperte.length ? `<ul>${aperte.map(x => `<li>${esc(x.domanda)} ${esc(x.a)} o ${esc(x.b)}?</li>`).join("")}</ul>` : '<p class="muted">Nessuna. Gruppo compatto.</p>'}</div>
-      <div class="tile dbox"><div class="kicker">Missioni · entro ${esc(G.scadenzaMissioni)}</div>${(d.missioni || []).map(x => { const m = G.missioni.find(y => y.id === x.m); return `<div class="dm">${icon(m.icona, "xs")}<b>${esc(m.nome)}</b><span>${x.pair.map(u => esc(P(u)?.name || "")).join(" e ")}</span></div>`; }).join("")}
+        <div class="kicker">Questioni aperte</div>${aperte.length ? `<ul>${aperte.map(x => `<li>${esc(x.domanda.replace(/[:?.]\s*$/, ""))}</li>`).join("")}</ul>` : '<p class="muted">Nessuna. Gruppo compatto.</p>'}</div>
+      <div class="tile dbox">${(d.avv || []).length ? `<div class="kicker">Identikit avventura</div><div class="davv">${d.avv.map(x => { const q = ((G.avventura || {}).domande || []).find(y => y.id === x.id); return q ? `<div><span>${esc(q.breve || q.domanda.replace(/[?:].*$/, ""))}</span><b>${esc(avvLabel(q, x.med))}</b></div>` : ""; }).join("")}</div>` : ""}
+        <div class="kicker">Missioni · entro ${esc(G.scadenzaMissioni)}</div>${(d.missioni || []).map(x => { const m = G.missioni.find(y => y.id === x.m); return `<div class="dm">${icon(m.icona, "xs")}<b>${esc(m.nome)}</b><span>${x.pair.map(u => esc(P(u)?.name || "")).join(" e ")}</span></div>`; }).join("")}
         <div class="kicker">Prossima serata</div><p><b>${esc(G.serate[1].titolo)}</b> · ${esc(G.serate[1].quando)}</p></div>
     </div>
     <div class="tile dbox dprof"><div class="kicker">Profilo di viaggio</div><div class="prof">${d.profilo.map(x => { const dd = dById(x.id); if (!dd) return ""; const tot = x.A + x.B; const pos = tot ? (x.B / tot) * 100 : 50;
@@ -557,12 +600,13 @@ function nextLabel() {
   if (s.step === "wyr" && s.sub === "intro") return "Iniziamo";
   if (s.step === "punti" && s.sub === "collect") return "Svela la classifica";
   if (s.step === "budget" && s.sub === "collect") return "Svela il budget";
+  if (s.step === "avventura" && s.sub === "collect") return "Svela il termometro";
   if (s.step === "missioni" && s.sub === "carte") return "Travel DNA";
   return "Avanti";
 }
 function renderHost() {
   const s = st(); if (!s.step) return `<div class="center-msg">Preparo la stanza…</div>`;
-  const views = { lobby: hostLobby, briefing: hostBriefing, patto: hostPatto, chi: hostChi, wyr: () => hostDilemma(false), lampo: () => hostDilemma(true), punti: hostPunti, budget: hostBudget, missioni: hostMissioni, dna: hostDNA };
+  const views = { lobby: hostLobby, briefing: hostBriefing, patto: hostPatto, chi: hostChi, wyr: () => hostDilemma(false), lampo: () => hostDilemma(true), punti: hostPunti, avventura: hostAvv, budget: hostBudget, missioni: hostMissioni, dna: hostDNA };
   return `<div class="host">
     <header class="hbar"><div class="brand">${esc(G.titolo)} <span>· Serata 1 · ${esc(G.serate[0].titolo)}</span></div><div class="phase">${esc(STEP_NAMES[s.step] || "")}</div>
       <div class="room">${DEMO ? '<span class="mock">simulazione · non si salva nulla</span>' : Store.mock ? '<span class="mock">modalità prova</span>' : ""}<span>Stanza <b>${CODE}</b></span><span>${nPlayers()} 👤</span><button class="mini" data-act="fullscreen" title="Schermo intero">⛶</button>${DEMO ? "" : '<button class="mini" data-act="newroom" title="Nuova stanza">⟲</button>'}</div></header>
@@ -655,6 +699,19 @@ function phonePunti() {
       <div class="stepper"><button data-act="pt" data-id="${c.id}" data-d="-5">−</button><span>${a[c.id] || 0}</span><button data-act="pt" data-id="${c.id}" data-d="5" ${left <= 0 ? "disabled" : ""}>+</button></div></div>`).join("")}</div>
     <button class="btn aur full" data-act="send-punti" ${left === 0 ? "" : "disabled"}>Invia</button></div>`;
 }
+function phoneAvv() {
+  const s = st(); const A = G.avventura || { domande: [] };
+  if (s.sub !== "collect") return watch("L'identikit è sullo schermo");
+  if (mine("avv") && !ui.editAvv) return `<div class="ph-wrap">${done("Inviato")}<button class="btn ghost full" data-act="edit-avv">Modifica</button></div>`;
+  if (!ui.drafts.avv) ui.drafts.avv = mine("avv") ? { ...mine("avv") } : {};
+  const d = ui.drafts.avv;
+  const ok = A.domande.every(q => d[q.id] !== undefined);
+  return `<div class="ph-wrap"><h2 class="pq">${esc(A.titolo || "Il termometro dell'avventura")}</h2><p class="muted">Rispondi per te, non per il gruppo.</p>
+    ${A.domande.map((q, i) => q.tipo === "scala"
+      ? `<label class="lab">${i + 1}. ${esc(q.domanda)}</label><div class="scala">${q.etichette.map((t, j) => `<button class="sc ${d[q.id] === j + 1 ? "sel" : ""}" data-act="avv" data-id="${q.id}" data-v="${j + 1}"><span>${j + 1}</span>${esc(t)}</button>`).join("")}</div>`
+      : `<label class="lab">${i + 1}. ${esc(q.domanda)}</label><div class="al"><div class="al-t"><b>${d[q.id] === undefined ? "—" : esc(d[q.id] + " " + (q.unita || ""))}</b></div><div class="stepper"><button data-act="avvn" data-id="${q.id}" data-d="-1">−</button><span>${d[q.id] ?? "–"}</span><button data-act="avvn" data-id="${q.id}" data-d="1">+</button></div></div>`).join("")}
+    <button class="btn aur full" data-act="send-avv" ${ok ? "" : "disabled"}>Invia</button></div>`;
+}
 function phoneBudget() {
   const s = st();
   if (s.sub !== "collect") return watch(s.sub === "souvenir" ? "Souvenir sullo schermo" : "Il budget del gruppo è sullo schermo");
@@ -697,7 +754,7 @@ function renderPhone() {
   if (!Object.keys(S.state || {}).length && !P(ME)) { if (S._loaded) return `<div class="center-msg">Stanza ${esc(CODE)} non trovata.<br><small>Controlla il codice.</small></div>`; return `<div class="center-msg">Collegamento…</div>`; }
   if (!P(ME)) return phoneJoin();
   const s = st(); const pts = points()[ME] || 0;
-  const views = { lobby: phoneLobby, briefing: () => watch(G.briefing[s.sub]?.titolo || "Guarda lo schermo", "Ascolta il Game Master."), patto: phonePatto, chi: phoneChi, wyr: () => phoneDilemma(false), lampo: () => phoneDilemma(true), punti: phonePunti, budget: phoneBudget, missioni: phoneMissioni, dna: phoneDNA };
+  const views = { lobby: phoneLobby, briefing: () => watch(G.briefing[s.sub]?.titolo || "Guarda lo schermo", "Ascolta il Game Master."), patto: phonePatto, chi: phoneChi, wyr: () => phoneDilemma(false), lampo: () => phoneDilemma(true), punti: phonePunti, avventura: phoneAvv, budget: phoneBudget, missioni: phoneMissioni, dna: phoneDNA };
   return `<div class="phone"><header class="phbar">${av(ME)}<b>${esc(P(ME).name)}</b><span class="pts">⚔ ${pts}</span></header>
     <main>${(views[s.step] || phoneLobby)()}</main></div>`;
 }
@@ -714,6 +771,10 @@ function phoneAction(act, el) {
   if (act === "pt") { const a = d.punti; const tot = Object.values(a).reduce((x, y) => x + y, 0); const delta = +el.dataset.d; const nv = (a[el.dataset.id] || 0) + delta; if (nv < 0 || (delta > 0 && tot >= 100)) return; a[el.dataset.id] = nv; return render(); }
   if (act === "send-punti") { ui.editPunti = false; return answer("punti", d.punti); }
   if (act === "edit-punti") { ui.editPunti = true; d.punti = { ...mine("punti") }; return render(); }
+  if (act === "avv") { d.avv[el.dataset.id] = +el.dataset.v; return render(); }
+  if (act === "avvn") { const q = (G.avventura.domande || []).find(x => x.id === el.dataset.id); const cur = d.avv[q.id]; const mn = +q.min || 0, mx = +q.max || 6; d.avv[q.id] = cur === undefined ? (+el.dataset.d > 0 ? mn + 1 : mn) : Math.min(mx, Math.max(mn, cur + (+el.dataset.d))); return render(); }
+  if (act === "send-avv") { ui.editAvv = false; return answer("avv", d.avv); }
+  if (act === "edit-avv") { ui.editAvv = true; d.avv = { ...mine("avv") }; return render(); }
   if (act === "spend") { const v = el.dataset.v; d.spend = d.spend || []; if (d.spend.includes(v)) d.spend = d.spend.filter(x => x !== v); else if (d.spend.length < 2) d.spend = [...d.spend, v]; else d.spend = [d.spend[1], v]; if (d.save === v) d.save = null; return render(); }
   if (act === "save") { d.save = el.dataset.v; return render(); }
   if (act === "send-budget") {
@@ -792,6 +853,14 @@ const Bots = {
         for (let n = 0; n < 20; n++) { let r = Math.random() * w.reduce((x, y) => x + y, 0), j = 0; while ((r -= w[j]) > 0) j++; a[G.categorie[j].id] += 5; }
         this.ans(b, "punti", a);
       }, 4000, 12000);
+      if (s.step === "avventura" && s.sub === "collect") this.later(k("avv"), () => {
+        const lvl = 1 + rnd(5); const a = {};
+        (G.avventura.domande || []).forEach(q => {
+          if (q.tipo === "scala") a[q.id] = Math.min(5, Math.max(1, lvl + rnd(3) - 1));
+          else { const mn = +q.min || 0, mx = +q.max || 6; a[q.id] = Math.min(mx, Math.max(mn, Math.round(mn + (mx - mn) * lvl / 6) + rnd(3) - 1)); }
+        });
+        this.ans(b, "avv", a);
+      }, 4000, 11000);
       if (s.step === "budget" && s.sub === "collect") this.later(k("budget"), () => {
         const comodo = 700 + rnd(9) * 50, max = comodo + 200 + rnd(7) * 50;
         Store.set(R(`secret/${b}`), { budget: { comodo, max } });
@@ -831,8 +900,8 @@ async function loadSavedCfg() {
   } catch (e) { console.warn("testi salvati non caricati, uso quelli di base", e); return null; }
 }
 
-const LINKED = { D1: "decide il mezzo nella missione", D4: "decide l'alloggio nella missione", D5: "basi o spostamenti nelle missioni", D6: "alloggio e nome spedizione", D14: "cucina nella missione alloggi", D7: "nome spedizione", D8: "nome spedizione", D9: "nome spedizione" };
-const NOMI_LABEL = { cacciatori: "Aurora in top 3 + sveglia per tutti", notturni: "Aurora in top 3 + cottage isolato", terme: "Terme in top 3", mattinieri: "Sveglia alle 7 + più posti", lowcost: "Budget basso + cucinare insieme", comodi: "Tutti gli altri casi" };
+const LINKED = { D1: "decide il mezzo nella missione", D4: "decide l'alloggio nella missione", D5: "basi o spostamenti nelle missioni", D6: "alloggio e nome spedizione", D14: "cucina nella missione alloggi", D7: "nome spedizione", D9: "nome spedizione" };
+const NOMI_LABEL = { cacciatori: "Aurora in top 3 + sveglia per tutti", notturni: "Aurora in top 3 + cottage isolato", terme: "Terme in top 3", mattinieri: "Sveglia alle 7 + più posti", lowcost: "Budget basso + cucinare insieme", avventurieri: "Fatica e adrenalina alte (termometro)", comodi: "Tutti gli altri casi" };
 const newId = () => "X" + Date.now().toString(36) + rnd(1000);
 const ADMIN_SCHEMA = [
   { key: "serate", title: "Le 4 serate", kind: "list", fixed: true, item: i => `Serata ${i + 1}`, fields: () => [["titolo", "Titolo"], ["quando", "Quando"], ["cosa", "Cosa si decide"]] },
@@ -847,6 +916,8 @@ const ADMIN_SCHEMA = [
     fields: () => [["domanda", "Domanda"], ["a", "Opzione A"], ["b", "Opzione B"], ["aurora", "Dilemma sull'aurora 🌌", "check"]] },
   { key: "lampo", title: "Giro lampo", kind: "list", add: () => ({ id: newId(), domanda: "", a: "", b: "" }), item: (i, x) => `${i + 1}.` + (LINKED[x.id] ? ` 🔗 ${LINKED[x.id]}` : ""), fields: () => [["domanda", "Domanda"], ["a", "Opzione A"], ["b", "Opzione B"]] },
   { key: "categorie", title: "I 100 punti: le 8 categorie", hint: "Le icone restano quelle: puoi cambiare nome e descrizione.", kind: "list", fixed: true, item: (i, x) => `${i + 1}. ${x.id}`, fields: () => [["nome", "Nome"], ["desc", "Descrizione"]] },
+  { key: "avventura", path: "avventura.domande", title: "Il termometro dell'avventura", hint: "Per le domande a scala servono esattamente 5 risposte, dalla più tranquilla alla più estrema.", kind: "list", fixed: true, item: (i, x) => `${i + 1}. ${x.tipo === "scala" ? "scala da 1 a 5" : "numero"}`,
+    fields: x => x.tipo === "scala" ? [["domanda", "Domanda"], ["breve", "Nome breve (Travel DNA)"], ["etichette", "Le 5 risposte (una per riga)", "lines"]] : [["domanda", "Domanda"], ["breve", "Nome breve (Travel DNA)"], ["unita", "Unità (es. ore)"]] },
   { key: "budget", title: "Budget al buio", kind: "obj", fields: () => [["voci", "Voci di spesa (una per riga)", "lines"], ["souvenir", "Domanda sul souvenir"]] },
   { key: "missioni", title: "Le missioni", hint: "Il contenuto delle carte si compila da solo con le scelte del gruppo; qui cambi il nome.", kind: "list", fixed: true, item: (i, x) => x.id, fields: () => [["nome", "Nome"]] },
   { key: "scadenzaMissioni", title: "Scadenza delle missioni", kind: "text" },
@@ -863,7 +934,7 @@ function admField(path, label, type, val) {
   return `<label class="af"><span>${esc(label)}</span><input id="${id}" data-adm="${path}" value="${esc(val || "")}"></label>`;
 }
 function admSection(sec) {
-  const v = adm.data[sec.key]; let body = "";
+  const P0 = sec.path || sec.key; const v = getPath(adm.data, P0); let body = "";
   if (sec.kind === "text") body = admField(sec.key, sec.title, "text", v);
   else if (sec.kind === "lines") body = admField(sec.key, "Testo", "lines", v);
   else if (sec.kind === "obj") body = sec.fields().map(([k, l, t]) => admField(`${sec.key}.${k}`, l, t, (v || {})[k])).join("");
@@ -872,8 +943,8 @@ function admSection(sec) {
     body = arr.map((x, i) => {
       const sub = sec.sub && sec.sub(x);
       return `<div class="ai"><div class="ai-h"><b>${esc(sec.item(i, x))}</b>${sec.fixed ? "" : `<span class="ai-b"><button data-act="adm-up" data-key="${sec.key}" data-i="${i}" ${i ? "" : "disabled"} title="Su">↑</button><button data-act="adm-down" data-key="${sec.key}" data-i="${i}" ${i < arr.length - 1 ? "" : "disabled"} title="Giù">↓</button><button data-act="adm-del" data-key="${sec.key}" data-i="${i}" title="Elimina">✕</button></span>`}</div>
-        <div class="ai-f">${sec.fields(x).map(([k, l, t]) => admField(`${sec.key}.${i}.${k}`, l, t, x[k])).join("")}
-        ${sub ? (x[sub.key] || []).map((y, j) => `<div class="ai-sub">${sub.fields.map(([k, l]) => admField(`${sec.key}.${i}.${sub.key}.${j}.${k}`, l, "text", y[k])).join("")}</div>`).join("") : ""}</div></div>`;
+        <div class="ai-f">${sec.fields(x).map(([k, l, t]) => admField(`${P0}.${i}.${k}`, l, t, x[k])).join("")}
+        ${sub ? (x[sub.key] || []).map((y, j) => `<div class="ai-sub">${sub.fields.map(([k, l]) => admField(`${P0}.${i}.${sub.key}.${j}.${k}`, l, "text", y[k])).join("")}</div>`).join("") : ""}</div></div>`;
     }).join("") + (sec.add ? `<button class="btn ghost" data-act="adm-add" data-key="${sec.key}">+ Aggiungi</button>` : "");
   }
   const count = Array.isArray(v) && sec.kind === "list" ? ` <small>(${v.length})</small>` : "";
@@ -894,6 +965,7 @@ function admValidate() {
   ["dilemmi", "lampo"].forEach(k => (adm.data[k] || []).forEach((d, i) => { if (!String(d.domanda || "").trim() || !String(d.a || "").trim() || !String(d.b || "").trim()) errs.push(`${k === "dilemmi" ? "Dilemma" : "Lampo"} ${i + 1}: mancano domanda o opzioni`); }));
   if (!(adm.data.dilemmi || []).length) errs.push("Serve almeno un dilemma");
   if ((adm.data.budget?.voci || []).length < 3) errs.push("Servono almeno 3 voci di spesa");
+  ((adm.data.avventura || {}).domande || []).forEach((q, i) => { if (q.tipo === "scala" && (q.etichette || []).length !== 5) errs.push(`Termometro, domanda ${i + 1}: servono 5 risposte`); });
   return errs;
 }
 async function adminAction(act, el) {

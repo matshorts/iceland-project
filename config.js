@@ -95,7 +95,10 @@ window.GAME = {
     { id: "D4", aurora: false, domanda: "Dove dormiamo?", a: "Una casa grande per tutti e 7", b: "Due alloggi più piccoli" },
     { id: "D5", aurora: false, domanda: "Che ritmo di viaggio?", a: "Cambiare posto quasi ogni notte", b: "2-3 basi fisse e gite in giornata" },
     { id: "D7", aurora: false, domanda: "Come iniziano le giornate?", a: "Sveglia alle 7, sfruttiamo tutta la luce", b: "Colazione lunga, partenza con calma" },
-    { id: "D8", aurora: false, domanda: "Cosa conta di più?", a: "Più posti visti", b: "Più tempo in ogni posto" },
+    { id: "D18", aurora: false, domanda: "Sul ghiacciaio:", a: "Escursione con ramponi e piccozza", b: "Grotta di ghiaccio: più facile e più foto" },
+    { id: "D19", aurora: false, domanda: "Il budget delle attività:", a: "Una grande avventura guidata, costosa", b: "Tante camminate libere, gratis" },
+    { id: "D20", aurora: false, domanda: "Il livello del gruppo:", a: "Puntiamo all'escursione più tosta che possiamo fare", b: "Si va al passo del più lento" },
+    { id: "D21", aurora: false, domanda: "Meteo incerto (strade aperte, nessuna allerta):", a: "Usciamo lo stesso, con l'attrezzatura giusta", b: "Cambiamo piano senza drammi" },
     { id: "D13", aurora: false, domanda: "Acqua calda:", a: "Una terma famosa, a pagamento", b: "Una pozza naturale sperduta, gratis" },
     { id: "D14", aurora: false, domanda: "A tavola:", a: "Cuciniamo insieme quasi sempre", b: "Mangiamo fuori quasi sempre" },
     { id: "D9", aurora: true, domanda: "Le previsioni dicono aurora alle 2 di notte.", a: "Sveglia per tutti", b: "Va chi vuole, domani racconta" },
@@ -111,6 +114,11 @@ window.GAME = {
     { id: "D12", domanda: "Davanti all'aurora:", a: "Tutti col telefono, foto perfetta", b: "Telefoni in tasca per i primi 10 minuti" },
     { id: "D15", domanda: "Lo squalo fermentato:", a: "Assaggio obbligatorio per tutti", b: "Solo per chi perde una scommessa" },
     { id: "D16", domanda: "Sempre in 7?", a: "Tutto sempre insieme", b: "Un pomeriggio liberi, divisi per interessi" },
+    { id: "D22", domanda: "Il giorno di massima avventura:", a: "Motoslitta sul ghiacciaio", b: "Trekking di mezza giornata in un canyon" },
+    { id: "D23", domanda: "Strade:", a: "Uscire dalla Ring Road verso posti meno famosi", b: "Restare sulle strade principali, più sicure d'inverno" },
+    { id: "D24", domanda: "Attrezzatura per il freddo:", a: "Noleggiamo o compriamo roba seria", b: "Ci arrangiamo con tanti strati" },
+    { id: "D25", domanda: "Il freddo:", a: "Almeno una volta in pantaloncini", b: "Non tolgo il cappello per 7 giorni" },
+    { id: "D26", domanda: "Spiaggia nera:", a: "Selfie vicino alle onde", b: "Rispetto le onde da 30 metri" },
     { id: "D17", domanda: "In furgone:", a: "Playlist democratica, una canzone a testa", b: "DJ a turno con potere assoluto" }
   ],
 
@@ -119,11 +127,23 @@ window.GAME = {
     { id: "cascate", nome: "Cascate e paesaggi", desc: "Le classiche del sud, spiagge nere" },
     { id: "ghiaccio", nome: "Ghiaccio", desc: "Ghiacciai, laguna glaciale, grotte" },
     { id: "terme", nome: "Terme e acqua calda", desc: "Lagune, piscine, pozze naturali" },
-    { id: "avventura", nome: "Avventura guidata", desc: "Escursioni, motoslitta, tour" },
+    { id: "avventura", nome: "Avventura e sport", desc: "Escursioni, ghiacciai, motoslitta, camminate" },
     { id: "cibo", nome: "Cibo e locali", desc: "Ristoranti, birre, Reykjavík la sera" },
     { id: "serate", nome: "Serate tra noi", desc: "Giochi, cucina insieme, chiacchiere" },
     { id: "foto", nome: "Foto e video", desc: "Fermarsi quando la luce è giusta" }
   ],
+
+  // Il termometro dell'avventura: l'identikit di quanto ci si vuole muovere
+  avventura: {
+    titolo: "Il termometro dell'avventura",
+    domande: [
+      { id: "fatica", breve: "Fatica", tipo: "scala", domanda: "Quanta fatica vuoi fare?", etichette: ["Passeggiate dal parcheggio", "Camminate facili", "Mezza giornata a piedi", "Giornata intera in movimento", "Trekking tosto, gambe distrutte"] },
+      { id: "escursioni", breve: "Escursioni", tipo: "numero", domanda: "Quante escursioni vere (almeno 2 ore) in 6 giorni?", min: 0, max: 6, unita: "escursioni" },
+      { id: "ore", breve: "Ore a piedi al giorno", tipo: "numero", domanda: "Quante ore a piedi al giorno, al massimo?", min: 0, max: 8, unita: "ore" },
+      { id: "adrenalina", breve: "Adrenalina", tipo: "scala", domanda: "Quanta adrenalina?", etichette: ["Solo panorami", "Qualche brivido", "Ramponi e ghiacciaio", "Motoslitta, grotte, tutto", "Se si può fare, lo faccio"] },
+      { id: "freddo", breve: "Freddo", tipo: "scala", domanda: "Quanto reggi il freddo?", etichette: ["Scappo in macchina", "Lo sopporto un po'", "Con gli strati giusti sto bene", "Il freddo mi esalta", "Pantaloncini anche col vento"] }
+    ]
+  },
 
   budget: {
     voci: ["Alloggi comodi", "Mezzo comodo", "Attività guidate", "Tour aurora", "Terme", "Cibo fuori", "Birre e serate"],
@@ -144,6 +164,7 @@ window.GAME = {
     terme: "Troll delle Terme",
     mattinieri: "Branco Mattiniero",
     lowcost: "Saghe Low Cost",
+    avventurieri: "Vichinghi d'Assalto",
     comodi: "Vichinghi Comodi"
   }
 };
