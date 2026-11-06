@@ -1,12 +1,22 @@
 (function () {
 "use strict";
-const G = window.GAME;
+const DEFAULTS = JSON.parse(JSON.stringify(window.GAME));
+let G = JSON.parse(JSON.stringify(DEFAULTS));
+const EDITABLE = ["serate", "lobby", "esempi", "briefing", "patto", "dilemmi", "lampo", "categorie", "budget", "missioni", "scadenzaMissioni", "nomi"];
+const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
+let cfgKey = "";
+function applyCfg(c) {
+  const k = JSON.stringify(c || null); if (k === cfgKey) return; cfgKey = k;
+  G = JSON.parse(JSON.stringify(DEFAULTS));
+  if (c) EDITABLE.forEach(key => { if (c[key] !== undefined && c[key] !== null) G[key] = c[key]; });
+}
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const params = new URLSearchParams(location.search);
 const DEMO = params.get("demo");            // "gm" oppure "giocatore": simulazione senza salvare nulla
 const DUO = DEMO === "giocatore";
 const SPEED = Math.max(1, +params.get("speed") || 1); // solo per i test              // telefono + schermo del Game Master affiancati
 const IS_HOST = params.has("host") || DEMO === "gm";
+const ADMIN = params.has("admin");
 let CODE = (params.get("r") || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 const app = document.getElementById("app");
 const rnd = n => Math.floor(Math.random() * n);
@@ -24,8 +34,8 @@ const Store = {
   async init() {
     if (DEMO) { this.mock = true; this.memory = true; this.mem = {}; this.uid = DEMO === "gm" ? "gm" : "me"; return; }
     const cfg = window.FIREBASE_CONFIG || {};
-    if (cfg.apiKey && window.firebase) {
-      firebase.initializeApp(cfg);
+    if (cfg.apiKey && window.firebase && !LOCAL) {
+      if (!firebase.apps.length) firebase.initializeApp(cfg);
       const auth = firebase.auth();
       // utente già collegato da una visita precedente?
       const existing = await new Promise(res => { const off = auth.onAuthStateChanged(u => { off(); res(u); }); });
@@ -285,7 +295,7 @@ function next() {
   switch (s.step) {
     case "lobby": return go("briefing");
     case "briefing": return s.sub < G.briefing.length - 1 ? setState({ sub: s.sub + 1 }) : go("patto");
-    case "patto": { const list = chiList(); return list.length ? go("chi", { sub: "guess", list }) : go("wyr", { sub: "play" }); }
+    case "patto": { const list = chiList(); return list.length ? go("chi", { sub: "guess", list }) : go("wyr", { sub: "intro" }); }
     case "chi":
       if (s.sub === "guess") {
         if (!s.reveal) return setState({ reveal: true });
@@ -293,9 +303,10 @@ function next() {
         return setState({ sub: "vote" });
       }
       if (s.sub === "vote") return setState({ sub: "win" });
-      return go("wyr", { sub: "play" });
+      return go("wyr", { sub: "intro" });
     case "wyr": case "lampo": {
       const list = s.step === "wyr" ? G.dilemmi : G.lampo;
+      if (s.sub === "intro") return setState({ sub: "play", t0: Date.now() });
       if (s.sub === "play") return setState({ sub: "result" });
       if (s.k < list.length - 1) return setState({ k: s.k + 1, sub: "play", round: 1, t0: Date.now() });
       return s.step === "wyr" ? go("lampo", { sub: "intro" }) : go("punti", { sub: "collect" });
@@ -350,6 +361,10 @@ function progress(n, tot, label = "hanno risposto") {
 function whoAnswered(key, filter) {
   return `<div class="who">${playerList().filter(p => !filter || filter(p.id)).map(p => `<div class="who-i ${ans(key)[p.id] !== undefined ? "on" : ""}">${av(p.id)}</div>`).join("")}</div>`;
 }
+function spunti(title, list) {
+  if (!list || !list.length) return "";
+  return `<div class="spunti"><span>💡 ${esc(title)}</span>${list.map(x => `<em>${esc(x)}</em>`).join("")}</div>`;
+}
 function hostLobby() {
   const url = location.origin + location.pathname + "?r=" + CODE;
   let qr = "";
@@ -364,6 +379,7 @@ function hostLobby() {
       <div class="players">${playerList().map(p => `<button class="pl ${s.gm === p.id ? "gm" : ""}" data-act="gm" data-id="${p.id}">${av(p.id)}<span>${esc(p.name)}</span>${s.gm === p.id ? '<em>Game Master</em>' : ""}${ans("follia")[p.id] ? '<i class="ok">✓</i>' : ""}</button>`).join("") || '<p class="muted">Ancora nessuno…</p>'}</div>
       <p class="hint">${nPlayers()}/${G.giocatoriAttesi} dentro. Tocca il tuo avatar per segnarti come Game Master: resti fuori dalle coppie.</p>
       <div class="cloud">${cloud || `<span class="muted">${esc(G.lobby.parola)}…</span>`}</div>
+      ${spunti("Se non ti viene la follia, per esempio:", (G.esempi || {}).follia)}
     </div></div>`;
 }
 function mapStrip(conquered) {
@@ -416,12 +432,19 @@ function bar(r, showAv = true) {
 }
 function hostDilemma(lampo) {
   const s = st(); const list = lampo ? G.lampo : G.dilemmi; const d = list[s.k];
-  if (lampo && s.sub === "intro") return `<div class="slide center"><div class="kicker">⚡</div><h1 class="title huge">Giro lampo</h1><p class="line">${G.lampo.length} dilemmi, 10 secondi l'uno. Niente scommesse, niente discussioni.</p></div>`;
+  if (lampo && s.sub === "intro") return `<div class="slide center"><div class="kicker">⚡</div><h1 class="title huge">Giro lampo</h1><p class="line">${G.lampo.length} dilemmi, 10 secondi l'uno. Niente sintonia, niente discussioni.</p></div>`;
+  if (!lampo && s.sub === "intro") {
+    const ex = G.dilemmi[0] || { a: "A", b: "B", domanda: "" };
+    return `<div class="slide"><div class="kicker">Would you rather · come funziona</div><h1 class="title">Ogni dilemma, due domande</h1>
+      <div class="howto-g"><div class="tile howto big"><span class="hn">1</span><div><b>🎯 Sintonia</b><p>Indovina cosa sceglierà <b>la maggioranza</b>. Se ci prendi, +1 punto vichingo.</p></div></div>
+      <div class="tile howto big"><span class="hn">2</span><div><b>✋ Il tuo voto</b><p>Poi voti quello che vuoi <b>davvero</b>. Non dà punti: è il voto che decide il viaggio.</p></div></div></div>
+      <p class="line ex">Esempio: pensi che il gruppo sceglierà «${esc(ex.a)}», ma tu preferisci «${esc(ex.b)}». Punti sulla prima per la sintonia, voti la seconda.</p></div>`;
+  }
   const key = "v_" + d.id + (s.round === 2 ? "_2" : "");
   const head = `<div class="kicker">${lampo ? "⚡ Giro lampo" : (d.aurora ? "🌌 Aurora" : "Would you rather")} · ${s.k + 1}/${list.length}${s.round === 2 ? " · Rivoto" : ""}</div><h1 class="title q">${esc(d.domanda)}</h1>`;
   const cards = (r) => `<div class="ab"><div class="tile opt oa ${r && r.winner === "A" ? "win" : ""}"><span class="L">A</span>${esc(d.a)}</div><div class="vs">o</div><div class="tile opt ob ${r && r.winner === "B" ? "win" : ""}"><span class="L">B</span>${esc(d.b)}</div></div>`;
   if (s.sub === "play") {
-    const bets = lampo || s.round === 2 ? "" : `<span class="muted">Scommesse: ${answered("bet_" + d.id)}/${nPlayers()}</span>`;
+    const bets = lampo || s.round === 2 ? "" : `<span class="muted">🎯 Sintonia: ${answered("bet_" + d.id)}/${nPlayers()}</span>`;
     return `<div class="slide">${head}${cards()}<div class="timer" data-t0="${s.t0}" data-dur="${lampo ? 10 : 20}"><i></i></div>
       ${progress(answered(key), nPlayers(), "hanno votato")} ${bets}${whoAnswered(key)}</div>`;
   }
@@ -429,7 +452,7 @@ function hostDilemma(lampo) {
   const betOk = lampo ? [] : playerList().filter(p => r.winner && ans("bet_" + d.id)[p.id] === r.winner);
   return `<div class="slide">${head}${cards(r)}${bar(r)}
     <div class="verdict v-${r.label.toLowerCase()}"><b>${r.label}</b> ${esc(LABEL_TXT[r.label])}</div>
-    ${betOk.length ? `<p class="hint">Scommessa vinta (+1): ${betOk.map(p => esc(p.name)).join(", ")}</p>` : ""}</div>`;
+    ${lampo ? "" : `<p class="hint sint-h">🎯 Sintonia ${betOk.length ? `+1: ${betOk.map(p => esc(p.name)).join(", ")}` : r.winner ? ": nessuno ci ha preso" : ": parità, nessun punto"}</p>`}</div>`;
 }
 function hostPunti() {
   const s = st(); const p = pres();
@@ -453,7 +476,8 @@ function hostBudget() {
   const s = st();
   if (s.sub === "collect") return `<div class="slide"><h1 class="title">Budget al buio</h1>
     <p class="line">Quanto spendi per la settimana, voli esclusi? Nessuno vedrà le tue cifre: sullo schermo arriva solo il risultato del gruppo.</p>
-    ${progress(Object.keys(SECRET || {}).filter(u => P(u)).length, nPlayers(), "hanno risposto")}</div>`;
+    ${progress(Object.keys(SECRET || {}).filter(u => P(u)).length, nPlayers(), "hanno risposto")}
+    ${spunti("Souvenir inutili, per esempio:", (G.esempi || {}).souvenir)}</div>`;
   if (s.sub === "reveal") {
     const b = s.budget;
     return `<div class="slide center"><h1 class="title">Il budget del gruppo</h1>${b ? `<div class="money">
@@ -530,6 +554,7 @@ function nextLabel() {
   const s = st();
   if (s.step === "chi" && s.sub === "guess" && !s.reveal) return "Svela";
   if ((s.step === "wyr" || s.step === "lampo") && s.sub === "play") return "Risultato";
+  if (s.step === "wyr" && s.sub === "intro") return "Iniziamo";
   if (s.step === "punti" && s.sub === "collect") return "Svela la classifica";
   if (s.step === "budget" && s.sub === "collect") return "Svela il budget";
   if (s.step === "missioni" && s.sub === "carte") return "Travel DNA";
@@ -559,7 +584,8 @@ const watch = (t, sub = "") => `<div class="watch"><div class="eye">👀</div><h
 const done = (t = "Fatto!", sub = "Aspetta gli altri.") => `<div class="watch"><div class="eye ok">✓</div><h2>${esc(t)}</h2><p class="muted">${esc(sub)}</p></div>`;
 function textQ(id, q, multi) {
   const v = ui.drafts[id] || "";
-  return `<div class="ph-wrap"><h2 class="pq">${esc(q)}</h2>${multi ? `<textarea class="inp" id="f-${id}" maxlength="140" rows="3">${esc(v)}</textarea>` : `<input class="inp" id="f-${id}" maxlength="24" value="${esc(v)}" autocomplete="off">`}
+  const ex = ((G.esempi || {})[id] || [])[0]; const ph = ex ? ` placeholder="es. ${esc(ex)}"` : "";
+  return `<div class="ph-wrap"><h2 class="pq">${esc(q)}</h2>${multi ? `<textarea class="inp" id="f-${id}" maxlength="140" rows="3"${ph}>${esc(v)}</textarea>` : `<input class="inp" id="f-${id}" maxlength="24" value="${esc(v)}" autocomplete="off"${ph}>`}
     <button class="btn aur full" data-act="send-text" data-id="${id}" ${v.trim() ? "" : "disabled"}>Invia</button></div>`;
 }
 function phoneLobby() {
@@ -593,20 +619,25 @@ function phoneChi() {
 function phoneDilemma(lampo) {
   const s = st(); const list = lampo ? G.lampo : G.dilemmi; const d = list[s.k];
   if (lampo && s.sub === "intro") return watch("Giro lampo!", "10 secondi a dilemma. Tieniti pronto.");
+  if (!lampo && s.sub === "intro") return `<div class="ph-wrap"><h2 class="pq">Come funziona</h2>
+    <div class="tile howto"><span class="hn">1</span><div><b>🎯 Sintonia</b><p>Indovina cosa sceglierà la maggioranza. Se ci prendi, <b>+1 punto vichingo</b>.</p></div></div>
+    <div class="tile howto"><span class="hn">2</span><div><b>✋ Il tuo voto</b><p>Vota quello che vuoi <b>davvero</b>. Non dà punti: decide il viaggio.</p></div></div>
+    <p class="ph-note">Guarda l'esempio sullo schermo.</p></div>`;
   const key = "v_" + d.id + (s.round === 2 ? "_2" : "");
   if (s.sub === "result") {
-    const r = dres(d.id); const v = ans(key)[ME];
-    return `<div class="ph-wrap"><h2 class="pq">${esc(d.domanda)}</h2>${bar(r, false)}<div class="verdict v-${r.label.toLowerCase()}"><b>${r.label}</b></div>
+    const r = dres(d.id); const v = ans(key)[ME]; const bet = mine("bet_" + d.id);
+    const sint = lampo || bet === undefined ? "" : r.winner ? (bet === r.winner ? '<div class="sint-ok">🎯 Sintonia! +1 punto vichingo</div>' : '<div class="sint-no">🎯 Sintonia mancata</div>') : '<div class="sint-no">🎯 Parità: nessun punto sintonia</div>';
+    return `<div class="ph-wrap"><h2 class="pq">${esc(d.domanda)}</h2>${bar(r, false)}<div class="verdict v-${r.label.toLowerCase()}"><b>${r.label}</b></div>${sint}
       <p class="muted">Hai votato: ${v === "A" ? esc(d.a) : v === "B" ? esc(d.b) : v === "T" ? "mi va bene tutto" : "niente"}</p></div>`;
   }
   const needBet = !lampo && s.round !== 2 && mine("bet_" + d.id) === undefined;
   if (needBet) return `<div class="ph-wrap"><div class="kicker">${d.aurora ? "🌌 " : ""}${s.k + 1}/${list.length}</div><h2 class="pq">${esc(d.domanda)}</h2>
-    <p class="bet-q">Prima scommetti: cosa sceglierà il gruppo?</p>
+    <p class="bet-q">🎯 Sintonia: cosa sceglierà la maggioranza?</p><p class="ph-note" style="text-align:left;padding:0">Se indovini, +1 punto vichingo. Il tuo voto arriva dopo.</p>
     <button class="opt-b oa" data-act="ans" data-key="bet_${d.id}" data-v="A"><span class="L">A</span>${esc(d.a)}</button>
     <button class="opt-b ob" data-act="ans" data-key="bet_${d.id}" data-v="B"><span class="L">B</span>${esc(d.b)}</button></div>`;
   const v = ans(key)[ME];
   return `<div class="ph-wrap"><div class="kicker">${lampo ? "⚡ " : d.aurora ? "🌌 " : ""}${s.k + 1}/${list.length}${s.round === 2 ? " · Rivoto" : ""}</div><h2 class="pq">${esc(d.domanda)}</h2>
-    ${!lampo && s.round !== 2 ? `<p class="muted">Hai scommesso su ${mine("bet_" + d.id)}. Ora vota tu.</p>` : ""}
+    ${!lampo && s.round !== 2 ? `<p class="bet-q">✋ E tu cosa vuoi davvero?</p><p class="ph-note" style="text-align:left;padding:0">Sintonia: hai puntato su ${mine("bet_" + d.id)}. Questo voto non dà punti, decide il viaggio.</p>` : ""}
     <button class="opt-b oa ${v === "A" ? "sel" : ""}" data-act="ans" data-key="${key}" data-v="A"><span class="L">A</span>${esc(d.a)}</button>
     <button class="opt-b ob ${v === "B" ? "sel" : ""}" data-act="ans" data-key="${key}" data-v="B"><span class="L">B</span>${esc(d.b)}</button>
     <button class="opt-b ot ${v === "T" ? "sel" : ""}" data-act="ans" data-key="${key}" data-v="T">Mi va bene tutto</button>
@@ -637,7 +668,7 @@ function phoneBudget() {
     ${m && c && m < c ? '<p class="warn">Il limite deve essere almeno quanto il comodo.</p>' : ""}
     <label class="lab">Su cosa spenderesti volentieri? <small>(scegline 2)</small></label><div class="chips">${G.budget.voci.map(v => `<button class="chip ${d.spend.includes(v) ? "sel" : ""}" data-act="spend" data-v="${esc(v)}">${esc(v)}</button>`).join("")}</div>
     <label class="lab">Su cosa risparmieresti? <small>(scegline 1)</small></label><div class="chips">${G.budget.voci.map(v => `<button class="chip save ${d.save === v ? "sel" : ""}" data-act="save" data-v="${esc(v)}" ${d.spend.includes(v) ? "disabled" : ""}>${esc(v)}</button>`).join("")}</div>
-    <label class="lab">${esc(G.budget.souvenir)}</label><input class="inp" id="f-souvenir" maxlength="60" value="${esc(d.souvenir || "")}" autocomplete="off">
+    <label class="lab">${esc(G.budget.souvenir)}</label><input class="inp" id="f-souvenir" maxlength="60" value="${esc(d.souvenir || "")}" autocomplete="off"${((G.esempi || {}).souvenir || [])[0] ? ` placeholder="es. ${esc(G.esempi.souvenir[0])}"` : ""}>
     <button class="btn aur full" data-act="send-budget" ${ok ? "" : "disabled"}>Invia</button></div>`;
 }
 function phoneMissioni() {
@@ -781,6 +812,134 @@ const Bots = {
   }
 };
 
+
+// ============================ TESTI SALVATI (pagina admin) ============================
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+async function loadSavedCfg() {
+  try {
+    if (LOCAL) { const d = JSON.parse(localStorage.getItem("ip-mock") || "{}"); return (d.cfg && d.cfg.game) || null; }
+    const fc = window.FIREBASE_CONFIG || {};
+    if (!fc.apiKey || !window.firebase) return null;
+    if (!firebase.apps.length) firebase.initializeApp(fc);
+    const auth = firebase.auth();
+    if (!auth.currentUser) {
+      const u = await withTimeout(new Promise(r => { const off = auth.onAuthStateChanged(x => { off(); r(x); }); }), 6000);
+      if (!u) await withTimeout(auth.signInAnonymously(), 8000);
+    }
+    const snap = await withTimeout(firebase.database().ref("cfg/game").get(), 8000);
+    return snap.val();
+  } catch (e) { console.warn("testi salvati non caricati, uso quelli di base", e); return null; }
+}
+
+const LINKED = { D1: "decide il mezzo nella missione", D4: "decide l'alloggio nella missione", D5: "basi o spostamenti nelle missioni", D6: "alloggio e nome spedizione", D14: "cucina nella missione alloggi", D7: "nome spedizione", D8: "nome spedizione", D9: "nome spedizione" };
+const NOMI_LABEL = { cacciatori: "Aurora in top 3 + sveglia per tutti", notturni: "Aurora in top 3 + cottage isolato", terme: "Terme in top 3", mattinieri: "Sveglia alle 7 + più posti", lowcost: "Budget basso + cucinare insieme", comodi: "Tutti gli altri casi" };
+const newId = () => "X" + Date.now().toString(36) + rnd(1000);
+const ADMIN_SCHEMA = [
+  { key: "serate", title: "Le 4 serate", kind: "list", fixed: true, item: i => `Serata ${i + 1}`, fields: () => [["titolo", "Titolo"], ["quando", "Quando"], ["cosa", "Cosa si decide"]] },
+  { key: "lobby", title: "Lobby: le due domande d'ingresso", kind: "obj", fields: () => [["parola", "Domanda «in una parola»"], ["follia", "Domanda nascosta (per «Chi l'ha detto?»)"]] },
+  { key: "esempi", title: "Spunti per le domande aperte", hint: "Uno per riga. Compaiono sullo schermo del Game Master; il primo anche come esempio in grigio sul telefono.", kind: "obj", fields: () => [["parola", "Spunti: in una parola", "lines"], ["follia", "Spunti: la cosa più folle", "lines"], ["souvenir", "Spunti: souvenir inutili", "lines"]] },
+  { key: "briefing", title: "Il briefing (slide iniziali)", kind: "list", fixed: true, item: (i, x) => `Slide ${i + 1}` + (x.tipo === "mappa" ? " · mappa delle serate" : x.tipo === "ruoli" ? " · i ruoli" : ""),
+    fields: x => x.tipo === "mappa" ? [["titolo", "Titolo"]] : x.tipo === "ruoli" ? [["titolo", "Titolo"], ["nota", "Nota in fondo", "area"]] : [["titolo", "Titolo"], ["righe", "Righe (una per riga)", "lines"], ["grande", "Frase finale grande"]],
+    sub: x => x.tipo === "ruoli" ? { key: "ruoli", fields: [["nome", "Ruolo"], ["testo", "Descrizione"]] } : null },
+  { key: "patto", title: "Il patto", hint: "Una regola per riga.", kind: "lines" },
+  { key: "dilemmi", title: "Would you rather (con sintonia)", hint: "🔗 = il risultato viene usato anche per compilare le missioni o il nome della spedizione: puoi cambiare le parole, ma tieni lo stesso significato.", kind: "list",
+    add: () => ({ id: newId(), aurora: false, domanda: "", a: "", b: "" }), item: (i, x) => `${i + 1}.` + (LINKED[x.id] ? ` 🔗 ${LINKED[x.id]}` : ""),
+    fields: () => [["domanda", "Domanda"], ["a", "Opzione A"], ["b", "Opzione B"], ["aurora", "Dilemma sull'aurora 🌌", "check"]] },
+  { key: "lampo", title: "Giro lampo", kind: "list", add: () => ({ id: newId(), domanda: "", a: "", b: "" }), item: (i, x) => `${i + 1}.` + (LINKED[x.id] ? ` 🔗 ${LINKED[x.id]}` : ""), fields: () => [["domanda", "Domanda"], ["a", "Opzione A"], ["b", "Opzione B"]] },
+  { key: "categorie", title: "I 100 punti: le 8 categorie", hint: "Le icone restano quelle: puoi cambiare nome e descrizione.", kind: "list", fixed: true, item: (i, x) => `${i + 1}. ${x.id}`, fields: () => [["nome", "Nome"], ["desc", "Descrizione"]] },
+  { key: "budget", title: "Budget al buio", kind: "obj", fields: () => [["voci", "Voci di spesa (una per riga)", "lines"], ["souvenir", "Domanda sul souvenir"]] },
+  { key: "missioni", title: "Le missioni", hint: "Il contenuto delle carte si compila da solo con le scelte del gruppo; qui cambi il nome.", kind: "list", fixed: true, item: (i, x) => x.id, fields: () => [["nome", "Nome"]] },
+  { key: "scadenzaMissioni", title: "Scadenza delle missioni", kind: "text" },
+  { key: "nomi", title: "Nomi della spedizione (Travel DNA)", kind: "obj", fields: () => Object.keys(DEFAULTS.nomi).map(k => [k, NOMI_LABEL[k] || k]) }
+];
+const adm = { data: null, state: "loading", msg: "", dirty: false, open: new Set(["dilemmi"]) };
+const getPath = (o, path) => path.split(".").reduce((x, k) => x == null ? x : x[k], o);
+function setPath(o, path, v) { const ks = path.split("."); let x = o; ks.slice(0, -1).forEach(k => x = x[k]); x[ks[ks.length - 1]] = v; }
+function admField(path, label, type, val) {
+  const id = "a-" + path.replace(/\./g, "_");
+  if (type === "check") return `<label class="af chk"><input type="checkbox" data-adm="${path}" data-t="check" ${val ? "checked" : ""}> ${esc(label)}</label>`;
+  if (type === "lines") { const arr = Array.isArray(val) ? val : []; return `<label class="af"><span>${esc(label)}</span><textarea id="${id}" data-adm="${path}" data-t="lines" rows="${Math.max(3, arr.length + 1)}">${esc(arr.join("\n"))}</textarea></label>`; }
+  if (type === "area") return `<label class="af"><span>${esc(label)}</span><textarea id="${id}" data-adm="${path}" rows="2">${esc(val || "")}</textarea></label>`;
+  return `<label class="af"><span>${esc(label)}</span><input id="${id}" data-adm="${path}" value="${esc(val || "")}"></label>`;
+}
+function admSection(sec) {
+  const v = adm.data[sec.key]; let body = "";
+  if (sec.kind === "text") body = admField(sec.key, sec.title, "text", v);
+  else if (sec.kind === "lines") body = admField(sec.key, "Testo", "lines", v);
+  else if (sec.kind === "obj") body = sec.fields().map(([k, l, t]) => admField(`${sec.key}.${k}`, l, t, (v || {})[k])).join("");
+  else {
+    const arr = v || [];
+    body = arr.map((x, i) => {
+      const sub = sec.sub && sec.sub(x);
+      return `<div class="ai"><div class="ai-h"><b>${esc(sec.item(i, x))}</b>${sec.fixed ? "" : `<span class="ai-b"><button data-act="adm-up" data-key="${sec.key}" data-i="${i}" ${i ? "" : "disabled"} title="Su">↑</button><button data-act="adm-down" data-key="${sec.key}" data-i="${i}" ${i < arr.length - 1 ? "" : "disabled"} title="Giù">↓</button><button data-act="adm-del" data-key="${sec.key}" data-i="${i}" title="Elimina">✕</button></span>`}</div>
+        <div class="ai-f">${sec.fields(x).map(([k, l, t]) => admField(`${sec.key}.${i}.${k}`, l, t, x[k])).join("")}
+        ${sub ? (x[sub.key] || []).map((y, j) => `<div class="ai-sub">${sub.fields.map(([k, l]) => admField(`${sec.key}.${i}.${sub.key}.${j}.${k}`, l, "text", y[k])).join("")}</div>`).join("") : ""}</div></div>`;
+    }).join("") + (sec.add ? `<button class="btn ghost" data-act="adm-add" data-key="${sec.key}">+ Aggiungi</button>` : "");
+  }
+  const count = Array.isArray(v) && sec.kind === "list" ? ` <small>(${v.length})</small>` : "";
+  return `<details data-sec="${sec.key}" ${adm.open.has(sec.key) ? "open" : ""}><summary>${esc(sec.title)}${count}</summary>${sec.hint ? `<p class="ah">${esc(sec.hint)}</p>` : ""}${body}</details>`;
+}
+function renderAdmin() {
+  if (adm.state === "loading") return `<div class="center-msg">Carico i testi…</div>`;
+  if (adm.state === "claim") return `<div class="center-msg"><div><h1 class="ptitle">Pagina admin</h1><p class="muted">Nessun amministratore ancora. Il computer da cui premi il pulsante diventa l'unico che può modificare i testi.</p><br><button class="btn aur" data-act="adm-claim">Diventa amministratore</button></div></div>`;
+  if (adm.state === "denied") return `<div class="center-msg"><div><h1 class="ptitle">Pagina admin</h1><p class="muted">Solo il computer dell'amministratore può modificare i testi.</p></div></div>`;
+  const n = (adm.data.dilemmi || []).length, l = (adm.data.lampo || []).length;
+  return `<div class="admin"><header class="adm-h"><div><h1>Testi del gioco</h1><p class="muted">${n} dilemmi + ${l} lampo · ${(adm.data.patto || []).length} regole del patto. Le modifiche valgono dalla prossima stanza creata (o simulazione).</p></div>
+    <div class="adm-btns"><a class="btn ghost" href="?demo=gm" target="_blank">Prova (simulazione)</a><button class="btn ghost" data-act="adm-reset">Ripristina originali</button><button class="btn aur" id="adm-save" data-act="adm-save">${adm.dirty ? "Salva" : "Salvato ✓"}</button></div></header>
+    ${adm.msg ? `<div class="adm-msg">${adm.msg}</div>` : ""}
+    <div class="adm-body">${ADMIN_SCHEMA.map(admSection).join("")}</div></div>`;
+}
+function admValidate() {
+  const errs = [];
+  ["dilemmi", "lampo"].forEach(k => (adm.data[k] || []).forEach((d, i) => { if (!String(d.domanda || "").trim() || !String(d.a || "").trim() || !String(d.b || "").trim()) errs.push(`${k === "dilemmi" ? "Dilemma" : "Lampo"} ${i + 1}: mancano domanda o opzioni`); }));
+  if (!(adm.data.dilemmi || []).length) errs.push("Serve almeno un dilemma");
+  if ((adm.data.budget?.voci || []).length < 3) errs.push("Servono almeno 3 voci di spesa");
+  return errs;
+}
+async function adminAction(act, el) {
+  const key = el.dataset.key, i = +el.dataset.i;
+  const arr = key ? adm.data[key] : null;
+  if (act === "adm-claim") { await Store.set("cfg/admin", ME); return startAdmin(); }
+  if (act === "adm-add") { const sec = ADMIN_SCHEMA.find(x => x.key === key); arr.push(sec.add()); adm.dirty = true; adm.open.add(key); return renderA(); }
+  if (act === "adm-del") { if (!confirm("Eliminare questa voce?")) return; arr.splice(i, 1); adm.dirty = true; return renderA(); }
+  if (act === "adm-up" && i > 0) { [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]]; adm.dirty = true; return renderA(); }
+  if (act === "adm-down" && i < arr.length - 1) { [arr[i + 1], arr[i]] = [arr[i], arr[i + 1]]; adm.dirty = true; return renderA(); }
+  if (act === "adm-save") {
+    const errs = admValidate();
+    if (errs.length) { adm.msg = "Non salvato: " + errs.map(esc).join(" · "); return renderA(); }
+    const out = {}; EDITABLE.forEach(k => out[k] = adm.data[k]);
+    try { await Store.set("cfg/game", JSON.parse(JSON.stringify(out))); adm.dirty = false; adm.msg = "Salvato. Le prossime stanze useranno questi testi."; }
+    catch (e) { adm.msg = "Errore nel salvataggio: " + esc(e.code || e.message || e); }
+    return renderA();
+  }
+  if (act === "adm-reset") {
+    if (!confirm("Tornare ai testi originali? Le tue modifiche salvate verranno cancellate.")) return;
+    try { await Store.set("cfg/game", null); } catch (e) {}
+    adm.data = JSON.parse(JSON.stringify(DEFAULTS)); adm.dirty = false; adm.msg = "Testi originali ripristinati."; return renderA();
+  }
+}
+function renderA() { app.innerHTML = renderAdmin(); }
+async function startAdmin() {
+  document.documentElement.classList.add("is-admin");
+  const owner = await Store.get("cfg/admin");
+  if (!owner) { adm.state = "claim"; return renderA(); }
+  if (owner !== ME) { adm.state = "denied"; return renderA(); }
+  const saved = await Store.get("cfg/game");
+  adm.data = JSON.parse(JSON.stringify(DEFAULTS));
+  if (saved) EDITABLE.forEach(k => { if (saved[k] !== undefined && saved[k] !== null) adm.data[k] = saved[k]; });
+  adm.state = "ready"; renderA();
+}
+document.addEventListener("toggle", e => { const d = e.target; if (d.dataset && d.dataset.sec) d.open ? adm.open.add(d.dataset.sec) : adm.open.delete(d.dataset.sec); }, true);
+document.addEventListener("input", e => {
+  const path = e.target.dataset && e.target.dataset.adm; if (!path || !adm.data) return;
+  const t = e.target.dataset.t;
+  const v = t === "check" ? e.target.checked : t === "lines" ? e.target.value.split("\n").map(x => x.trim()).filter(Boolean) : e.target.value;
+  setPath(adm.data, path, v); adm.dirty = true;
+  const b = document.getElementById("adm-save"); if (b) b.textContent = "Salva";
+});
+document.addEventListener("change", e => { if (e.target.dataset && e.target.dataset.t === "check" && e.target.dataset.adm) { setPath(adm.data, e.target.dataset.adm, e.target.checked); adm.dirty = true; const b = document.getElementById("adm-save"); if (b) b.textContent = "Salva"; } });
+window.addEventListener("beforeunload", e => { if (ADMIN && adm.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
 // ============================ RENDER ============================
 let lastHTML = "";
 let lastPhone = "";
@@ -813,11 +972,12 @@ document.addEventListener("click", e => {
   const act = el.dataset.act;
   if (act === "host-start") { location.search = "?host"; return; }
   if (act === "code-go") { const c = (document.getElementById("f-code").value || "").toUpperCase().trim(); if (c) location.search = "?r=" + c; return; }
+  if (ADMIN) return adminAction(act, el);
   if (DUO) return el.closest(".duo-host") ? hostAction(act, el) : phoneAction(act, el);
   IS_HOST ? hostAction(act, el) : phoneAction(act, el);
 });
 document.addEventListener("input", e => {
-  const id = e.target.id; if (!id || !id.startsWith("f-")) return;
+  const id = e.target.id; if (ADMIN || !id || !id.startsWith("f-")) return;
   const k = id.slice(2); ui.drafts[k] = e.target.value;
   if (!IS_HOST) {
     const html = renderPhone();
@@ -831,7 +991,7 @@ document.addEventListener("input", e => {
   }
 });
 document.addEventListener("keydown", e => {
-  if ((!IS_HOST && !DUO) || ["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
+  if (ADMIN || (!IS_HOST && !DUO) || ["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
   if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); next(); }
   if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); back(); }
 });
@@ -846,19 +1006,22 @@ function landing() {
 
 // ============================ AVVIO ============================
 async function start() {
-  if (!IS_HOST && !CODE && !DEMO) return landing();
+  if (!IS_HOST && !CODE && !DEMO && !ADMIN) return landing();
   try { await Store.init(); } catch (e) {
     app.innerHTML = `<div class="center-msg"><div>Non riesco a collegarmi.<br><br><small class="muted">Controlla la connessione. Se usi un blocco pubblicità o una VPN, prova a disattivarli per questa pagina.</small><br><br><button class="btn aur" onclick="location.reload()">Riprova</button><br><br><small class="muted" style="font-size:.7em">${esc(e.code || e.message || e)}</small></div></div>`;
     return;
   }
   ME = Store.uid;
+  if (ADMIN) return startAdmin();
   if (DEMO) {
     document.documentElement.classList.add(DUO ? "is-duo" : "is-host");
     CODE = "DEMO";
+    const saved = await loadSavedCfg();
     await Store.set(R("host"), ME);
+    if (saved) await Store.set(R("pub/cfg"), saved);
     await Store.set(R("pub/state"), { step: "lobby", sub: 0, k: 0, t0: Date.now() });
     Store.on(R("secret"), v => { SECRET = v || {}; render(); });
-    Store.on(R("pub"), v => { S = v || {}; S.state = S.state || {}; S._loaded = true; render(); Bots.tick(); });
+    Store.on(R("pub"), v => { S = v || {}; S.state = S.state || {}; S._loaded = true; applyCfg(S.cfg); render(); Bots.tick(); });
     Bots.start();
     render(); tick();
     return;
@@ -872,6 +1035,8 @@ async function start() {
       CODE = Array.from({ length: 4 }, () => L[rnd(L.length)]).join("");
       await Store.set(R("host"), ME);
       localStorage.setItem("ip-host-code", CODE);
+      const saved = await loadSavedCfg();
+      if (saved) await Store.set(R("pub/cfg"), saved);
     }
     const cur = await Store.get(R("pub/state"));
     if (!cur) await Store.set(R("pub/state"), { step: "lobby", sub: 0, k: 0, t0: Date.now() });
@@ -879,7 +1044,7 @@ async function start() {
   } else {
     document.documentElement.classList.add("is-phone");
   }
-  Store.on(R("pub"), v => { S = v || {}; S.state = S.state || {}; S._loaded = true; render(); });
+  Store.on(R("pub"), v => { S = v || {}; S.state = S.state || {}; S._loaded = true; applyCfg(S.cfg); render(); });
   render(); tick();
 }
 start();

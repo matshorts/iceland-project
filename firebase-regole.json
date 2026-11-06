@@ -1,0 +1,48 @@
+{
+  "rules": {
+    "rooms": {
+      "$code": {
+        "host": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!data.exists() || data.val() === auth.uid)"
+        },
+        "pub": {
+          ".read": "auth != null",
+          "state": {
+            ".write": "auth != null && root.child('rooms').child($code).child('host').val() === auth.uid"
+          },
+          "players": {
+            "$uid": {
+              ".write": "auth != null && ($uid === auth.uid || root.child('rooms').child($code).child('host').val() === auth.uid)"
+            }
+          },
+          "ans": {
+            "$key": {
+              "$uid": {
+                ".write": "auth != null && $uid === auth.uid"
+              }
+            }
+          },
+          "cfg": {
+            ".write": "auth != null && root.child('rooms').child($code).child('host').val() === auth.uid"
+          }
+        },
+        "secret": {
+          ".read": "auth != null && root.child('rooms').child($code).child('host').val() === auth.uid",
+          "$uid": {
+            ".write": "auth != null && $uid === auth.uid"
+          }
+        }
+      }
+    },
+    "cfg": {
+      ".read": "auth != null",
+      "admin": {
+        ".write": "auth != null && !data.exists() && newData.val() === auth.uid"
+      },
+      "game": {
+        ".write": "auth != null && root.child('cfg').child('admin').val() === auth.uid"
+      }
+    }
+  }
+}

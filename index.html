@@ -223,6 +223,42 @@ html.is-phone body{background:linear-gradient(180deg,#232c3b,var(--bg) 40%)}
 .phone .dna-h h1{font-size:4em}.phone .dbox{font-size:1.6em}.phone .prof{display:flex;flex-direction:column;gap:.5em}.phone .pf{font-size:1.4em;display:flex;gap:.5em}.phone .pf .slider{display:none}.phone .pf:has(.w) span:not(.w){display:none}.phone .pf .w::before{content:"✓ ";color:var(--aur)}.phone .pf:not(:has(.w)) .pa::after{content:"  o";color:var(--mute)}.phone .pf .pa{text-align:left}
 .phone .dna-av .av{width:4em;height:4em}
 
+
+/* sintonia, spiegazione, spunti */
+.howto{display:flex;gap:.9em;align-items:flex-start;padding:1em 1.1em}.howto b{font-family:"Lilita One";font-weight:400;font-size:1.15em;color:var(--gold)}.howto p{font-weight:600;margin-top:.2em}.howto p b{font-family:Nunito;font-weight:900;font-size:1em;color:var(--ink)}
+.hn{flex:none;width:1.8em;height:1.8em;border-radius:50%;background:var(--bg);color:var(--aur);display:grid;place-items:center;font-family:"Lilita One"}
+.howto-g{display:grid;grid-template-columns:1fr 1fr;gap:3rem}.howto.big{font-size:2.4rem;padding:3rem}
+.line.ex{font-size:2.1rem;color:var(--mute)}
+.sint-ok{background:rgba(75,227,160,.15);color:var(--aur);border-radius:10px;padding:.6em .8em;font-weight:900;text-align:center}
+.sint-no{background:var(--bg2);color:var(--mute);border-radius:10px;padding:.6em .8em;text-align:center}
+.sint-h{color:var(--aur)}
+.spunti{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:center;font-size:1.5rem;color:var(--mute)}.spunti span{color:var(--gold);font-weight:800}
+.spunti em{font-style:normal;background:rgba(0,0,0,.25);border-radius:99px;padding:.3em .9em;color:var(--ink);font-weight:700}
+
+
+/* ================= ADMIN ================= */
+html.is-admin body{background:var(--bg)}
+.admin{max-width:980px;margin:0 auto;padding:24px 20px 80px}
+.adm-h{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;position:sticky;top:0;background:var(--bg);padding:12px 0;z-index:5;border-bottom:2px solid var(--slate)}
+.adm-h h1{font-size:2em;color:var(--aur)}.adm-h p{font-size:.92em}
+.adm-btns{display:flex;gap:10px;flex-wrap:wrap}.adm-btns .btn{font-size:1em}
+.adm-msg{margin:14px 0;padding:10px 14px;border-radius:10px;background:var(--slate2);color:var(--gold)}
+.adm-body{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+.admin details{background:var(--slate2);border-radius:14px;padding:4px 16px}
+.admin summary{cursor:pointer;font-family:"Lilita One";font-size:1.3em;padding:12px 0;color:var(--ink)}.admin summary small{color:var(--mute);font-family:Nunito}
+.ah{color:var(--mute);font-weight:600;font-size:.92em;margin-bottom:10px}
+.ai{background:var(--slate);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.ai-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.ai-h b{color:var(--gold);font-size:.95em}
+.ai-b{display:flex;gap:6px}.ai-b button{width:32px;height:32px;border-radius:8px;background:var(--slate3);font-weight:900}
+.ai-f{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px}.ai-f .af:first-child{grid-column:1/-1}
+.ai-sub{grid-column:1/-1;display:grid;grid-template-columns:1fr 2fr;gap:8px;padding:8px;border-radius:8px;background:rgba(0,0,0,.15)}
+.af{display:flex;flex-direction:column;gap:4px;font-size:.85em;color:var(--mute);margin-bottom:8px}
+.af input,.af textarea{background:var(--bg2);border:2px solid var(--slate3);color:var(--ink);font:inherit;font-size:1.1em;font-weight:700;padding:8px 10px;border-radius:9px;outline:none;resize:vertical}
+.af input:focus,.af textarea:focus{border-color:var(--aur)}
+.af.chk{flex-direction:row;align-items:center;gap:8px;font-size:.95em;color:var(--ink)}.af.chk input{width:20px;height:20px}
+details > .btn{margin:6px 0 14px}
+@media (max-width:640px){.ai-f{grid-template-columns:1fr}}
+
 /* ================= SIMULAZIONE GIOCATORE (telefono + schermo) ================= */
 html.is-duo{font-size:min(calc((100vw - 470px) / 120), calc((100vh - 24px) / 67.5))}
 html.is-duo body{overflow:hidden}
@@ -247,7 +283,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="assets/vendor/firebase-app-compat.js"></script>
 <script src="assets/vendor/firebase-auth-compat.js"></script>
 <script src="assets/vendor/firebase-database-compat.js"></script>
-<script src="config.js?v=3"></script>
-<script src="game.js?v=3"></script>
+<script src="config.js?v=4"></script>
+<script src="game.js?v=4"></script>
 </body>
 </html>

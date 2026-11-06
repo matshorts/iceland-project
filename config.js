@@ -41,6 +41,13 @@ window.GAME = {
     follia: "La cosa più folle che faresti in Islanda"
   },
 
+  // Spunti per le domande aperte: sullo schermo del Game Master (il primo anche come esempio sul telefono)
+  esempi: {
+    parola: ["Aurora", "Freddo", "Libertà", "Ghiaccio", "Avventura"],
+    follia: ["Fare il bagno in una pozza calda a -10°", "Assaggiare lo squalo fermentato", "Dormire nel furgone per vedere l'aurora", "Imparare una frase in islandese e usarla al bar", "Un tuffo nell'oceano a febbraio"],
+    souvenir: ["Un elmo vichingo di plastica", "Una calamita a forma di pulcinella", "Un barattolo di «aria islandese»", "Un maglione di lana che punge"]
+  },
+
   briefing: [
     {
       tipo: "testo",
@@ -60,7 +67,7 @@ window.GAME = {
         { nome: "Le coppie", testo: "Cambiano ogni serata e ricevono missioni corte, da 20-30 minuti." },
         { nome: "Il gruppo", testo: "Discute e vota. Le decisioni sono di tutti." }
       ],
-      nota: "Giocando si guadagnano punti vichinghi: decidono chi sceglie per primo la missione."
+      nota: "Si guadagnano punti vichinghi indovinando chi ha scritto cosa e con la sintonia: decidono chi sceglie per primo la missione."
     },
     {
       tipo: "testo",
