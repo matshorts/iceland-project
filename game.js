@@ -22,10 +22,18 @@ const Store = {
     const cfg = window.FIREBASE_CONFIG || {};
     if (cfg.apiKey && window.firebase) {
       firebase.initializeApp(cfg);
-      await new Promise((res, rej) => {
-        firebase.auth().onAuthStateChanged(u => { if (u) { this.uid = u.uid; res(); } });
-        firebase.auth().signInAnonymously().catch(rej);
-      });
+      const auth = firebase.auth();
+      // utente già collegato da una visita precedente?
+      const existing = await new Promise(res => { const off = auth.onAuthStateChanged(u => { off(); res(u); }); });
+      if (existing) this.uid = existing.uid;
+      else {
+        let lastErr = null;
+        for (let i = 0; i < 4 && !this.uid; i++) {
+          try { const r = await auth.signInAnonymously(); this.uid = r.user.uid; }
+          catch (e) { lastErr = e; await new Promise(r => setTimeout(r, 1200 * (i + 1))); }
+        }
+        if (!this.uid) throw lastErr || new Error("accesso non riuscito");
+      }
       this.db = firebase.database();
       return;
     }
@@ -754,7 +762,10 @@ function landing() {
 // ============================ AVVIO ============================
 async function start() {
   if (!IS_HOST && !CODE) return landing();
-  try { await Store.init(); } catch (e) { app.innerHTML = `<div class="center-msg">Non riesco a collegarmi.<br><small>${esc(e.message || e)}</small></div>`; return; }
+  try { await Store.init(); } catch (e) {
+    app.innerHTML = `<div class="center-msg"><div>Non riesco a collegarmi.<br><br><small class="muted">Controlla la connessione. Se usi un blocco pubblicità o una VPN, prova a disattivarli per questa pagina.</small><br><br><button class="btn aur" onclick="location.reload()">Riprova</button><br><br><small class="muted" style="font-size:.7em">${esc(e.code || e.message || e)}</small></div></div>`;
+    return;
+  }
   ME = Store.uid;
   if (IS_HOST) {
     document.documentElement.classList.add("is-host");
