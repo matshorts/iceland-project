@@ -1,0 +1,779 @@
+(function () {
+"use strict";
+const G = window.GAME;
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const params = new URLSearchParams(location.search);
+const IS_HOST = params.has("host");
+let CODE = (params.get("r") || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const app = document.getElementById("app");
+const rnd = n => Math.floor(Math.random() * n);
+function shuffle(a, seed) {
+  a = a.slice();
+  let s = 0; for (const ch of String(seed || Math.random())) s = (s * 31 + ch.charCodeAt(0)) >>> 0;
+  const r = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor((seed ? r() : Math.random()) * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
+// ============================ STORE ============================
+const Store = {
+  uid: null, mock: false, listeners: [],
+  async init() {
+    const cfg = window.FIREBASE_CONFIG || {};
+    if (cfg.apiKey && window.firebase) {
+      firebase.initializeApp(cfg);
+      await new Promise((res, rej) => {
+        firebase.auth().onAuthStateChanged(u => { if (u) { this.uid = u.uid; res(); } });
+        firebase.auth().signInAnonymously().catch(rej);
+      });
+      this.db = firebase.database();
+      return;
+    }
+    this.mock = true;
+    let id = sessionStorage.getItem("ip-uid");
+    if (!id) { id = "u" + Math.random().toString(36).slice(2, 10); sessionStorage.setItem("ip-uid", id); }
+    this.uid = id;
+    this.bc = new BroadcastChannel("ip-mock");
+    this.bc.onmessage = () => this.fire();
+    window.addEventListener("storage", e => { if (e.key === "ip-mock") this.fire(); });
+  },
+  _data() { try { return JSON.parse(localStorage.getItem("ip-mock") || "{}"); } catch (e) { return {}; } },
+  _get(d, path) { return path.split("/").reduce((o, k) => (o == null ? undefined : o[k]), d); },
+  _set(d, path, v) {
+    const ks = path.split("/"); let o = d;
+    for (let i = 0; i < ks.length - 1; i++) { if (typeof o[ks[i]] !== "object" || o[ks[i]] === null) o[ks[i]] = {}; o = o[ks[i]]; }
+    if (v === null || v === undefined) delete o[ks[ks.length - 1]]; else o[ks[ks.length - 1]] = JSON.parse(JSON.stringify(v));
+  },
+  fire() { const d = this._data(); this.listeners.forEach(l => l.cb(this._get(d, l.path) ?? null)); },
+  on(path, cb) {
+    if (!this.mock) {
+      const ref = this.db.ref(path);
+      const h = s => cb(s.val());
+      ref.on("value", h, err => console.warn("lettura negata", path, err && err.code));
+      return () => ref.off("value", h);
+    }
+    const l = { path, cb }; this.listeners.push(l);
+    setTimeout(() => cb(this._get(this._data(), path) ?? null), 0);
+    return () => { this.listeners = this.listeners.filter(x => x !== l); };
+  },
+  set(path, v) {
+    if (!this.mock) return this.db.ref(path).set(v);
+    const d = this._data(); this._set(d, path, v); localStorage.setItem("ip-mock", JSON.stringify(d)); this.bc.postMessage(1); this.fire(); return Promise.resolve();
+  },
+  update(path, obj) {
+    if (!this.mock) return this.db.ref(path).update(obj);
+    const d = this._data(); Object.entries(obj).forEach(([k, v]) => this._set(d, path + "/" + k, v));
+    localStorage.setItem("ip-mock", JSON.stringify(d)); this.bc.postMessage(1); this.fire(); return Promise.resolve();
+  },
+  get(path) {
+    if (!this.mock) return this.db.ref(path).get().then(s => s.val());
+    return Promise.resolve(this._get(this._data(), path) ?? null);
+  }
+};
+
+// ============================ DATA ============================
+let ME = null;
+let S = { state: {}, players: {}, ans: {} };
+let SECRET = {};
+const ui = { drafts: {}, focus: null, history: [], hold: null, spin: null };
+const st = () => S.state || {};
+const R = p => `rooms/${CODE}/${p}`;
+const playerList = () => Object.entries(S.players || {}).map(([id, p]) => ({ id, ...p })).sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+const P = id => (S.players || {})[id];
+const ans = key => (S.ans || {})[key] || {};
+const mine = key => ans(key)[ME];
+const nPlayers = () => playerList().length;
+const answered = key => Object.keys(ans(key)).filter(u => P(u)).length;
+const av = (id, cls = "") => P(id) ? `<img class="av ${cls}" src="assets/${esc(P(id).avatar)}.png" alt="${esc(P(id).name)}" title="${esc(P(id).name)}">` : "";
+const avTile = id => P(id) ? `<div class="avt">${av(id)}<span>${esc(P(id).name)}</span></div>` : "";
+const icon = (id, cls = "") => `<img class="ico ${cls}" src="assets/${esc(id)}.png" alt="">`;
+const answer = (key, val) => Store.set(R(`pub/ans/${key}/${ME}`), val);
+const catById = id => G.categorie.find(c => c.id === id);
+const allDilemmi = () => [...G.dilemmi, ...G.lampo];
+const dById = id => allDilemmi().find(d => d.id === id);
+
+// ============================ CALCOLI ============================
+function dres(id) {
+  const r2 = ans("v_" + id + "_2");
+  const round2 = Object.keys(r2).length > 0;
+  const use = round2 ? r2 : ans("v_" + id);
+  const c = { A: [], B: [], T: [] };
+  Object.entries(use).forEach(([u, v]) => { if (c[v] && P(u)) c[v].push(u); });
+  const a = c.A.length, b = c.B.length, tot = a + b;
+  let label = "Indifferenti", winner = null;
+  if (tot > 0) {
+    if (a === b) label = "Spaccatura";
+    else { winner = a > b ? "A" : "B"; label = Math.max(a, b) / tot >= 0.8 ? "Netta" : "Chiara"; }
+  }
+  return { c, a, b, t: c.T.length, tot: a + b + c.T.length, winner, label, round2 };
+}
+const LABEL_TXT = {
+  Netta: "Decisione presa.",
+  Chiara: "Tendenza chiara, salvo sorprese dalle missioni.",
+  Spaccatura: "Un sostenitore per parte la difende in 30 secondi. Poi si rivota.",
+  Indifferenti: "A tutti va bene tutto. Sospetto."
+};
+
+function points() {
+  const pts = {}; const add = (u, n) => { if (P(u)) pts[u] = (pts[u] || 0) + n; };
+  (st().list || []).forEach(author => {
+    Object.entries(ans("chi_" + author)).forEach(([u, guess]) => {
+      if (u === author) return;
+      if (guess === author) add(u, 1); else add(author, 1);
+    });
+  });
+  G.dilemmi.forEach(d => {
+    const r = dres(d.id); if (!r.winner) return;
+    Object.entries(ans("bet_" + d.id)).forEach(([u, b]) => { if (b === r.winner) add(u, 1); });
+  });
+  return pts;
+}
+
+function pres() {
+  const all = {}; Object.entries(ans("punti")).forEach(([u, a]) => { if (P(u)) all[u] = a; });
+  const n = Object.keys(all).length;
+  const cats = G.categorie.map(c => {
+    const vals = Object.values(all).map(a => +a[c.id] || 0);
+    const tot = vals.reduce((x, y) => x + y, 0);
+    const mean = n ? tot / n : 0;
+    const sd = n ? Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / n) : 0;
+    const accordo = mean === 0 ? "a nessuno interessa" : (sd / mean < 0.6 ? "d'accordo" : "divisi");
+    return { ...c, tot, accordo };
+  }).sort((a, b) => b.tot - a.tot);
+  let pass = null;
+  Object.entries(all).forEach(([u, a]) => Object.entries(a).forEach(([cid, v]) => { v = +v; if (!pass || v > pass.v) pass = { u, cid, v }; }));
+  const top3 = cats.slice(0, 3), sacr = cats.slice(-2);
+  const passCat = pass ? catById(pass.cid) : null;
+  const nonSacr = passCat && !top3.some(c => c.id === passCat.id) ? passCat : null;
+  return { n, cats, top3, sacr, pass, passCat, nonSacr };
+}
+
+function bres() {
+  const vals = Object.entries(SECRET || {}).filter(([u]) => P(u)).map(([, s]) => s && s.budget).filter(Boolean);
+  if (!vals.length) return null;
+  return { n: vals.length, obiettivo: Math.min(...vals.map(v => +v.comodo)), tetto: Math.min(...vals.map(v => +v.max)) };
+}
+function speseRes() {
+  const cnt = {}; G.budget.voci.forEach(v => cnt[v] = { su: 0, giu: 0 });
+  Object.entries(ans("spese")).forEach(([u, s]) => {
+    if (!P(u) || !s) return;
+    (s.spend || []).forEach(v => cnt[v] && cnt[v].su++);
+    if (s.save && cnt[s.save]) cnt[s.save].giu++;
+  });
+  return G.budget.voci.map(v => ({ v, ...cnt[v] })).sort((a, b) => (b.su - b.giu) - (a.su - a.giu));
+}
+function folliaWinner() {
+  const cnt = {}; Object.entries(ans("follia_vote")).forEach(([u, a]) => { if (P(u)) cnt[a] = (cnt[a] || 0) + 1; });
+  const best = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
+  if (!best) return null;
+  return { author: best[0], votes: best[1], testo: ans("follia")[best[0]] };
+}
+function makePairs() {
+  const ids = shuffle(playerList().map(p => p.id).filter(id => id !== st().gm));
+  const pairs = []; for (let i = 0; i < ids.length; i += 2) pairs.push(ids.slice(i, i + 2));
+  if (pairs.length > 1 && pairs[pairs.length - 1].length === 1) pairs[pairs.length - 2].push(pairs.pop()[0]);
+  return pairs;
+}
+function pairOrder(pairs) {
+  const pts = points();
+  return pairs.map((p, i) => ({ i, s: p.reduce((t, u) => t + (pts[u] || 0), 0), r: Math.random() }))
+    .sort((a, b) => b.s - a.s || a.r - b.r).map(x => x.i);
+}
+function draft() {
+  const order = st().order || [], pairs = st().pairs || [];
+  const taken = {}, assign = {};
+  for (let t = 0; t < order.length; t++) {
+    const pi = order[t];
+    const remaining = G.missioni.filter(m => !taken[m.id]);
+    if (!remaining.length) return { assign, turn: order.length, done: true };
+    if (remaining.length === 1 && t === order.length - 1) { assign[pi] = remaining[0].id; taken[remaining[0].id] = 1; continue; }
+    const picks = Object.entries(ans("pick_" + pi)).filter(([u]) => (pairs[pi] || []).includes(u)).map(([, p]) => p);
+    const valid = picks.filter(p => p && !taken[p.m]).sort((a, b) => a.at - b.at)[0];
+    if (!valid) return { assign, turn: t, done: false, taken };
+    assign[pi] = valid.m; taken[valid.m] = 1;
+  }
+  return { assign, turn: order.length, done: true, taken };
+}
+function myPair() { return (st().pairs || []).findIndex(p => p.includes(ME)); }
+
+function missionCard(id) {
+  const d1 = dres("D1"), d4 = dres("D4"), d5 = dres("D5"), d6 = dres("D6"), d14 = dres("D14");
+  const p = pres(); const auroraTop = p.top3.some(c => c.id === "aurora");
+  const b = st().budget;
+  const bud = b ? `Obiettivo del gruppo: ${b.obiettivo} € a persona per tutta la settimana, voli esclusi.` : "";
+  if (id === "mezzo") {
+    const v = d1.winner === "A" ? "un furgone da 9 posti" : d1.winner === "B" ? "due auto" : "un furgone da 9 posti e due auto, da confrontare";
+    return {
+      obiettivo: `Trovate 2-3 preventivi reali per ${v}, dal 17 al 24 febbraio, con ritiro e riconsegna a Keflavík.`,
+      portate: ["Prezzo totale con le assicurazioni", "Quanti conducenti sono inclusi", "Pneumatici invernali e trazione", "Quanti bagagli ci stanno davvero con 7 persone"],
+      dove: "Noleggi islandesi e comparatori di noleggio", nota: bud
+    };
+  }
+  if (id === "alloggi") {
+    const tipo = d4.winner === "B" ? "due alloggi vicini" : "una casa per tutti e 7";
+    const extra = [];
+    if (d14.winner !== "B") extra.push("con cucina");
+    if (auroraTop || d6.winner === "A") extra.push("lontano dalle luci, per l'aurora");
+    const zone = d5.winner === "A" ? "lungo il percorso, 2 zone diverse" : "in 2 zone che possano fare da base fissa";
+    return {
+      obiettivo: `Trovate ${tipo}${extra.length ? ", " + extra.join(", ") : ""}, ${zone}.`,
+      portate: ["3 opzioni per zona", "Prezzo a notte e totale", "Cancellazione gratuita sì o no", "Link"],
+      dove: "Booking, Airbnb, guesthouse e cottage locali", nota: bud
+    };
+  }
+  const perc = d5.winner === "A" ? "con spostamenti quasi ogni notte" : d5.winner === "B" ? "con 2-3 basi fisse" : "una con basi fisse e una con spostamenti";
+  return {
+    obiettivo: "Scoprite cosa ci sta davvero in 6 giorni d'inverno, partendo da Keflavík.",
+    portate: ["Tempi di guida realistici verso le zone del sud", "Ore di luce a febbraio", "Dove e come si guarda l'aurora", `2 ipotesi di percorso, ${perc}`],
+    dove: "road.is (strade) · safetravel.is (avvisi) · vedur.is (meteo e aurora)", nota: ""
+  };
+}
+
+function nomeSpedizione(p) {
+  const top = p.top3.map(c => c.id); const r = id => dres(id).winner; const b = st().budget;
+  if (top.includes("aurora") && r("D9") === "A") return G.nomi.cacciatori;
+  if (top.includes("aurora") && r("D6") === "A") return G.nomi.notturni;
+  if (top.includes("terme")) return G.nomi.terme;
+  if (r("D7") === "A" && r("D8") === "A") return G.nomi.mattinieri;
+  if (b && b.obiettivo < 900 && r("D14") === "A") return G.nomi.lowcost;
+  return G.nomi.comodi;
+}
+function computeDNA() {
+  const p = pres(); const fw = folliaWinner(); const dr = draft();
+  return {
+    nome: nomeSpedizione(p), quando: G.serate[0].quando, budget: st().budget || null,
+    top3: p.top3.map(c => c.id), nonSacr: p.nonSacr ? p.nonSacr.id : null, sacr: p.sacr.map(c => c.id),
+    profilo: allDilemmi().map(d => { const x = dres(d.id); return { id: d.id, A: x.a, B: x.b, label: x.label, winner: x.winner }; }),
+    follia: fw ? fw.testo : null,
+    missioni: Object.entries(dr.assign).map(([pi, m]) => ({ pair: (st().pairs || [])[pi] || [], m })),
+    giocatori: playerList().map(p => p.id)
+  };
+}
+
+// ============================ HOST: FLUSSO ============================
+const STEP_NAMES = { lobby: "Lobby", briefing: "Il briefing", patto: "Il patto", chi: "Chi l'ha detto?", wyr: "Would you rather", lampo: "Giro lampo", punti: "I 100 punti", budget: "Budget al buio", missioni: "Le missioni", dna: "Il Travel DNA" };
+function setState(patch, push = true) {
+  if (push) ui.history.push(JSON.stringify(st()));
+  const ns = { ...st(), ...patch };
+  Object.keys(ns).forEach(k => ns[k] === undefined && delete ns[k]);
+  return Store.set(R("pub/state"), ns);
+}
+function go(step, extra = {}) { return setState({ step, sub: 0, k: 0, reveal: false, round: 1, t0: Date.now(), ...extra }); }
+function chiList() { return shuffle(playerList().filter(p => ans("follia")[p.id]).map(p => p.id), CODE); }
+function canNext() {
+  const s = st();
+  if (s.step === "missioni" && s.sub === "coppie") return !!s.pairs;
+  if (s.step === "missioni" && s.sub === "draft") return draft().done;
+  if (s.step === "dna") return false;
+  return true;
+}
+function next() {
+  const s = st(); if (!canNext()) return;
+  switch (s.step) {
+    case "lobby": return go("briefing");
+    case "briefing": return s.sub < G.briefing.length - 1 ? setState({ sub: s.sub + 1 }) : go("patto");
+    case "patto": { const list = chiList(); return list.length ? go("chi", { sub: "guess", list }) : go("wyr", { sub: "play" }); }
+    case "chi":
+      if (s.sub === "guess") {
+        if (!s.reveal) return setState({ reveal: true });
+        if (s.k < s.list.length - 1) return setState({ k: s.k + 1, reveal: false });
+        return setState({ sub: "vote" });
+      }
+      if (s.sub === "vote") return setState({ sub: "win" });
+      return go("wyr", { sub: "play" });
+    case "wyr": case "lampo": {
+      const list = s.step === "wyr" ? G.dilemmi : G.lampo;
+      if (s.sub === "play") return setState({ sub: "result" });
+      if (s.k < list.length - 1) return setState({ k: s.k + 1, sub: "play", round: 1, t0: Date.now() });
+      return s.step === "wyr" ? go("lampo", { sub: "intro" }) : go("punti", { sub: "collect" });
+    }
+    case "punti":
+      if (s.sub === "collect") return setState({ sub: "reveal", k: 1 });
+      if (s.sub === "reveal") return s.k < G.categorie.length ? setState({ k: s.k + 1 }) : setState({ sub: "passione" });
+      if (s.sub === "passione") return setState({ sub: "sintesi" });
+      return go("budget", { sub: "collect" });
+    case "budget":
+      if (s.sub === "collect") return setState({ sub: "reveal", budget: bres() });
+      if (s.sub === "reveal") return setState({ sub: "mappa" });
+      if (s.sub === "mappa") return setState({ sub: "souvenir" });
+      return go("missioni", { sub: "coppie" });
+    case "missioni":
+      if (s.sub === "coppie") return setState({ sub: "draft", order: pairOrder(s.pairs) });
+      if (s.sub === "draft") return setState({ sub: "carte" });
+      return go("dna", { dna: computeDNA() });
+  }
+}
+function back() {
+  const prev = ui.history.pop(); if (!prev) return;
+  Store.set(R("pub/state"), JSON.parse(prev));
+}
+function hostAction(act, el) {
+  const s = st();
+  if (act === "next") return next();
+  if (act === "back") return back();
+  if (act === "gm") { const id = el.dataset.id; return setState({ gm: s.gm === id ? null : id }, false); }
+  if (act === "lampo-go") return setState({ sub: "play", t0: Date.now() });
+  if (act === "rivota") return setState({ sub: "play", round: 2, t0: Date.now() });
+  if (act === "ruota") {
+    const pairs = makePairs();
+    ui.spin = Date.now();
+    render();
+    setTimeout(() => { ui.spin = null; setState({ pairs }); }, 1800);
+    return;
+  }
+  if (act === "newroom") {
+    if (!confirm("Creare una stanza nuova? La partita in corso resta salvata ma nessuno ci entrerà più.")) return;
+    localStorage.removeItem("ip-host-code"); location.reload();
+  }
+  if (act === "dna-refresh") return setState({ dna: computeDNA() }, false);
+  if (act === "download") return downloadDNA();
+  if (act === "fullscreen") { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {}); }
+}
+
+// ============================ HOST: VISTE ============================
+function progress(n, tot, label = "hanno risposto") {
+  return `<div class="progress"><b>${n}/${tot}</b> ${label}<div class="pbar"><i style="width:${tot ? (n / tot) * 100 : 0}%"></i></div></div>`;
+}
+function whoAnswered(key, filter) {
+  return `<div class="who">${playerList().filter(p => !filter || filter(p.id)).map(p => `<div class="who-i ${ans(key)[p.id] !== undefined ? "on" : ""}">${av(p.id)}</div>`).join("")}</div>`;
+}
+function hostLobby() {
+  const url = location.origin + location.pathname + "?r=" + CODE;
+  let qr = "";
+  try { const q = qrcode(0, "M"); q.addData(url); q.make(); qr = q.createSvgTag({ cellSize: 8, margin: 2, scalable: true }); } catch (e) { qr = ""; }
+  const words = {}; Object.entries(ans("parola")).forEach(([u, w]) => { if (!P(u)) return; const k = String(w).trim().toLowerCase(); if (k) words[k] = (words[k] || 0) + 1; });
+  const cloud = Object.entries(words).map(([w, n], i) => `<span class="w w${i % 5}" style="font-size:${2.2 + n * 1.4}rem">${esc(w)}</span>`).join("");
+  const s = st();
+  return `<div class="lobby">
+    <div class="tile qrbox"><div class="qr">${qr}</div><div class="code">${CODE}</div><div class="url">${esc(url.replace(/^https?:\/\//, ""))}</div></div>
+    <div class="lobby-r">
+      <h1 class="title">Inquadra il QR<br><span>e scegli il tuo animale</span></h1>
+      <div class="players">${playerList().map(p => `<button class="pl ${s.gm === p.id ? "gm" : ""}" data-act="gm" data-id="${p.id}">${av(p.id)}<span>${esc(p.name)}</span>${s.gm === p.id ? '<em>Game Master</em>' : ""}${ans("follia")[p.id] ? '<i class="ok">✓</i>' : ""}</button>`).join("") || '<p class="muted">Ancora nessuno…</p>'}</div>
+      <p class="hint">${nPlayers()}/${G.giocatoriAttesi} dentro. Tocca il tuo avatar per segnarti come Game Master: resti fuori dalle coppie.</p>
+      <div class="cloud">${cloud || `<span class="muted">${esc(G.lobby.parola)}…</span>`}</div>
+    </div></div>`;
+}
+function mapStrip(conquered) {
+  return `<div class="strip">${G.serate.map((x, i) => `<div class="tappa ${i < conquered ? "won" : i === conquered ? "now" : ""}">
+      <div class="tile tnum">${i < conquered ? "✓" : x.n}</div><b>${esc(x.titolo)}</b><span>${esc(x.quando)}</span><small>${esc(x.cosa)}</small></div>`).join('<div class="road"></div>')}</div>`;
+}
+function hostBriefing() {
+  const sl = G.briefing[st().sub] || G.briefing[0];
+  if (sl.tipo === "mappa") return `<div class="slide"><h1 class="title">${esc(sl.titolo)}</h1>${mapStrip(0)}</div>`;
+  if (sl.tipo === "ruoli") return `<div class="slide"><h1 class="title">${esc(sl.titolo)}</h1>
+     <div class="roles">${sl.ruoli.map((r, i) => `<div class="tile role"><span class="rn">${i + 1}</span><b>${esc(r.nome)}</b><p>${esc(r.testo)}</p></div>`).join("")}</div>
+     <p class="big-note">⚔ ${esc(sl.nota)}</p></div>`;
+  return `<div class="slide"><h1 class="title">${esc(sl.titolo)}</h1>${sl.righe.map(r => `<p class="line">${esc(r)}</p>`).join("")}<p class="promise">${esc(sl.grande)}</p></div>`;
+}
+function hostPatto() {
+  const signed = playerList().filter(p => ans("patto")[p.id]);
+  const all = signed.length === nPlayers() && nPlayers() > 0;
+  return `<div class="slide"><h1 class="title">Il patto della spedizione</h1>
+    <ol class="patto">${G.patto.map(r => `<li>${esc(r)}</li>`).join("")}</ol>
+    <div class="seals">${signed.map(p => `<div class="seal">${av(p.id)}</div>`).join("")}</div>
+    <p class="hint">${all ? "<b class='aur'>Patto firmato da tutti.</b>" : `${signed.length}/${nPlayers()} firme. Tieni premuto il dito sul telefono.`}</p></div>`;
+}
+function hostChi() {
+  const s = st();
+  if (s.sub === "guess") {
+    const author = s.list[s.k]; const g = ans("chi_" + author);
+    const guessers = playerList().filter(p => p.id !== author);
+    const right = guessers.filter(p => g[p.id] === author);
+    return `<div class="slide"><div class="kicker">Follia ${s.k + 1} di ${s.list.length}</div>
+      <div class="tile quote">«${esc(ans("follia")[author])}»</div>
+      ${s.reveal ? `<div class="reveal"><div class="flip">${av(author, "big")}</div><div><h2>L'ha scritta ${esc(P(author).name)}</h2>
+        <p>${right.length ? `Indovinato da ${right.map(p => esc(p.name)).join(", ")} (+1)` : "Non l'ha indovinata nessuno."} ${guessers.length - right.length ? `${esc(P(author).name)} ne ha ingannati ${guessers.length - right.length} (+${guessers.length - right.length}).` : ""}</p>
+        <p class="muted">Domanda veloce: davvero?</p></div></div>`
+        : `${progress(answered("chi_" + author), nPlayers(), "hanno votato")}${whoAnswered("chi_" + author)}`}</div>`;
+  }
+  if (s.sub === "vote") {
+    const cnt = {}; Object.values(ans("follia_vote")).forEach(a => cnt[a] = (cnt[a] || 0) + 1);
+    return `<div class="slide"><h1 class="title">Quale follia facciamo davvero?</h1>
+      <div class="follie">${s.list.map(a => `<div class="tile fol"><span>«${esc(ans("follia")[a])}»</span></div>`).join("")}</div>
+      ${progress(answered("follia_vote"), nPlayers(), "hanno votato")}</div>`;
+  }
+  const w = folliaWinner();
+  return `<div class="slide center"><div class="kicker">La follia scelta</div><div class="tile quote win">«${esc(w ? w.testo : "—")}»</div>
+    <p class="line">${w ? `${w.votes} voti. Entra di diritto tra le candidate della serata 2.` : ""}</p></div>`;
+}
+function bar(r, showAv = true) {
+  const tot = Math.max(1, r.tot);
+  const seg = (k, cls) => r.c[k].length ? `<div class="seg ${cls}" style="flex:${r.c[k].length}"><b>${r.c[k].length}</b>${showAv ? `<div class="segav">${r.c[k].map(u => av(u)).join("")}</div>` : ""}</div>` : "";
+  return `<div class="split">${seg("A", "sa")}${seg("T", "st")}${seg("B", "sb")}${r.tot === 0 ? '<div class="seg st" style="flex:1"><b>nessun voto</b></div>' : ""}</div>`;
+}
+function hostDilemma(lampo) {
+  const s = st(); const list = lampo ? G.lampo : G.dilemmi; const d = list[s.k];
+  if (lampo && s.sub === "intro") return `<div class="slide center"><div class="kicker">⚡</div><h1 class="title huge">Giro lampo</h1><p class="line">${G.lampo.length} dilemmi, 10 secondi l'uno. Niente scommesse, niente discussioni.</p></div>`;
+  const key = "v_" + d.id + (s.round === 2 ? "_2" : "");
+  const head = `<div class="kicker">${lampo ? "⚡ Giro lampo" : (d.aurora ? "🌌 Aurora" : "Would you rather")} · ${s.k + 1}/${list.length}${s.round === 2 ? " · Rivoto" : ""}</div><h1 class="title q">${esc(d.domanda)}</h1>`;
+  const cards = (r) => `<div class="ab"><div class="tile opt oa ${r && r.winner === "A" ? "win" : ""}"><span class="L">A</span>${esc(d.a)}</div><div class="vs">o</div><div class="tile opt ob ${r && r.winner === "B" ? "win" : ""}"><span class="L">B</span>${esc(d.b)}</div></div>`;
+  if (s.sub === "play") {
+    const bets = lampo || s.round === 2 ? "" : `<span class="muted">Scommesse: ${answered("bet_" + d.id)}/${nPlayers()}</span>`;
+    return `<div class="slide">${head}${cards()}<div class="timer" data-t0="${s.t0}" data-dur="${lampo ? 10 : 20}"><i></i></div>
+      ${progress(answered(key), nPlayers(), "hanno votato")} ${bets}${whoAnswered(key)}</div>`;
+  }
+  const r = dres(d.id);
+  const betOk = lampo ? [] : playerList().filter(p => r.winner && ans("bet_" + d.id)[p.id] === r.winner);
+  return `<div class="slide">${head}${cards(r)}${bar(r)}
+    <div class="verdict v-${r.label.toLowerCase()}"><b>${r.label}</b> ${esc(LABEL_TXT[r.label])}</div>
+    ${betOk.length ? `<p class="hint">Scommessa vinta (+1): ${betOk.map(p => esc(p.name)).join(", ")}</p>` : ""}</div>`;
+}
+function hostPunti() {
+  const s = st(); const p = pres();
+  if (s.sub === "collect") return `<div class="slide"><h1 class="title">Hai 100 punti. Dove li metti?</h1>
+    <div class="cats">${G.categorie.map(c => `<div class="cat">${icon(c.id)}<b>${esc(c.nome)}</b></div>`).join("")}</div>
+    ${progress(answered("punti"), nPlayers(), "hanno distribuito i punti")}${whoAnswered("punti")}</div>`;
+  if (s.sub === "reveal") {
+    const max = Math.max(1, ...p.cats.map(c => c.tot));
+    const shown = p.cats.slice(G.categorie.length - s.k);
+    const startRank = G.categorie.length - s.k;
+    return `<div class="slide"><h1 class="title">La classifica del gruppo</h1><div class="rank">${shown.map((c, i) => `<div class="rk ${startRank + i < 3 ? "top" : ""}"><span class="pos">${startRank + i + 1}</span>${icon(c.id, "sm")}<b>${esc(c.nome)}</b><div class="rbar"><i style="width:${(c.tot / max) * 100}%"></i></div><span class="pts">${c.tot}</span><em class="acc ${c.accordo === "divisi" ? "div" : ""}">${esc(c.accordo)}</em></div>`).join("")}</div></div>`;
+  }
+  if (s.sub === "passione") return `<div class="slide center"><div class="kicker">La passione segreta</div>
+    ${p.passCat ? `${icon(p.passCat.id, "hero")}<h1 class="title">Qualcuno ha messo ${p.pass.v} punti su ${esc(p.passCat.nome)}.</h1><p class="line">Vuoi svelarti?</p>` : "<p>Nessun dato.</p>"}</div>`;
+  return `<div class="slide"><h1 class="title">Le priorità del viaggio</h1><div class="sint">
+    <div class="tile sbox"><div class="kicker">Top 3</div>${p.top3.map(c => `<div class="srow">${icon(c.id, "sm")}<b>${esc(c.nome)}</b></div>`).join("")}</div>
+    <div class="tile sbox"><div class="kicker">Da non sacrificare</div>${p.nonSacr ? `<div class="srow">${icon(p.nonSacr.id, "sm")}<b>${esc(p.nonSacr.nome)}</b></div><p class="muted">La passione di qualcuno, anche se è fuori dalla top 3.</p>` : '<p class="muted">La passione più forte è già in top 3.</p>'}</div>
+    <div class="tile sbox"><div class="kicker">Qui si risparmia</div>${p.sacr.map(c => `<div class="srow dim">${icon(c.id, "sm")}<b>${esc(c.nome)}</b></div>`).join("")}</div></div></div>`;
+}
+function hostBudget() {
+  const s = st();
+  if (s.sub === "collect") return `<div class="slide"><h1 class="title">Budget al buio</h1>
+    <p class="line">Quanto spendi per la settimana, voli esclusi? Nessuno vedrà le tue cifre: sullo schermo arriva solo il risultato del gruppo.</p>
+    ${progress(Object.keys(SECRET || {}).filter(u => P(u)).length, nPlayers(), "hanno risposto")}</div>`;
+  if (s.sub === "reveal") {
+    const b = s.budget;
+    return `<div class="slide center"><h1 class="title">Il budget del gruppo</h1>${b ? `<div class="money">
+      <div class="tile mbox"><div class="kicker">Obiettivo</div><b>${b.obiettivo} €</b><span>a persona, voli esclusi</span></div>
+      <div class="tile mbox red"><div class="kicker">Tetto</div><b>${b.tetto} €</b><span>oltre non si va</span></div></div>
+      <p class="hint">L'obiettivo è il "comodo" più basso, il tetto il "massimo" più basso: così nessuno resta fuori.</p>` : "<p>Nessuna risposta.</p>"}</div>`;
+  }
+  if (s.sub === "mappa") {
+    const sr = speseRes(); const m = Math.max(1, ...sr.map(x => Math.max(x.su, x.giu)));
+    return `<div class="slide"><h1 class="title">La mappa delle spese</h1><div class="spese">${sr.map(x => `<div class="sp"><b>${esc(x.v)}</b>
+      <div class="sbar l"><i style="width:${(x.giu / m) * 100}%"></i><em>${x.giu || ""}</em></div><div class="sbar r"><i style="width:${(x.su / m) * 100}%"></i><em>${x.su || ""}</em></div></div>`).join("")}</div>
+      <div class="legend"><span class="lg l">← qui risparmiamo</span><span class="lg r">qui spendiamo volentieri →</span></div></div>`;
+  }
+  const list = playerList().map(p => ans("souvenir")[p.id]).filter(Boolean);
+  return `<div class="slide"><h1 class="title">Souvenir inutili che compreremo comunque</h1><div class="souv">${shuffle(list, CODE).map(t => `<div class="tile sv">${esc(t)}</div>`).join("")}</div></div>`;
+}
+function hostMissioni() {
+  const s = st();
+  if (s.sub === "coppie") {
+    if (ui.spin) return `<div class="slide center"><h1 class="title">Formiamo le coppie…</h1><div class="spin">${shuffle(playerList().filter(p => p.id !== s.gm)).map(p => av(p.id)).join("")}</div></div>`;
+    if (!s.pairs) return `<div class="slide center"><h1 class="title">Le coppie</h1><p class="line">${s.gm ? `${esc(P(s.gm)?.name || "")} è il Game Master e resta fuori.` : "Nessun Game Master segnato: entrano tutti."}</p><button class="btn big aur" data-act="ruota">Gira la ruota</button></div>`;
+    const pts = points();
+    return `<div class="slide"><h1 class="title">Le coppie di stasera</h1><div class="pairs">${s.pairs.map((p, i) => `<div class="tile pair"><div class="kicker">Coppia ${i + 1}</div><div class="pav">${p.map(u => avTile(u)).join("")}</div><span class="muted">⚔ ${p.reduce((t, u) => t + (pts[u] || 0), 0)} punti vichinghi</span></div>`).join("")}</div>
+      <div><button class="btn ghost" data-act="ruota">Rigira</button></div></div>`;
+  }
+  if (s.sub === "draft") {
+    const dr = draft();
+    return `<div class="slide"><h1 class="title">Scegliete la missione</h1><p class="line">Sceglie per prima la coppia con più punti vichinghi.</p>
+      <div class="draft">${s.order.map((pi, t) => { const m = dr.assign[pi] ? G.missioni.find(x => x.id === dr.assign[pi]) : null;
+        return `<div class="tile drow ${t === dr.turn ? "now" : ""}"><span class="pos">${t + 1}</span><div class="pav">${s.pairs[pi].map(u => av(u)).join("")}</div>
+          ${m ? `<div class="mpick">${icon(m.icona, "sm")}<b>${esc(m.nome)}</b></div>` : t === dr.turn ? '<em class="aur">sta scegliendo…</em>' : '<em class="muted">in attesa</em>'}</div>`; }).join("")}</div></div>`;
+  }
+  const dr = draft();
+  return `<div class="slide"><h1 class="title">Le missioni</h1><p class="hint">Scadenza: ${esc(G.scadenzaMissioni)}.</p><div class="mcards">${Object.entries(dr.assign).map(([pi, mid]) => mcardHTML(mid, s.pairs[pi])).join("")}</div></div>`;
+}
+function mcardHTML(mid, pair) {
+  const m = G.missioni.find(x => x.id === mid); const c = missionCard(mid);
+  return `<div class="tile mcard"><div class="mhead">${icon(m.icona, "sm")}<b>${esc(m.nome)}</b></div>
+    ${pair ? `<div class="pav small">${pair.map(u => av(u)).join("")}<span>${pair.map(u => esc(P(u)?.name)).join(" e ")}</span></div>` : ""}
+    <p class="mobj">${esc(c.obiettivo)}</p><div class="kicker">Portate</div><ul>${c.portate.map(x => `<li>${esc(x)}</li>`).join("")}</ul>
+    <div class="kicker">Dove cercare</div><p class="muted">${esc(c.dove)}</p>${c.nota ? `<p class="muted">${esc(c.nota)}</p>` : ""}
+    <p class="due">Entro: ${esc(G.scadenzaMissioni)}</p></div>`;
+}
+function dnaHTML(d) {
+  if (!d) return "";
+  const cat = id => catById(id);
+  const aperte = d.profilo.filter(x => x.label === "Spaccatura").map(x => dById(x.id));
+  return `<div class="dna" id="dna">
+    <div class="dna-h"><div><div class="kicker">The Iceland Project · ${esc(d.quando)}</div><h1>${esc(d.nome)}</h1></div>
+      <div class="dna-av">${(d.giocatori || []).map(u => av(u)).join("")}</div></div>
+    <div class="dna-g">
+      <div class="tile dbox"><div class="kicker">Budget a persona · voli esclusi</div>${d.budget ? `<div class="dmoney"><span>Obiettivo <b>${d.budget.obiettivo} €</b></span><span>Tetto <b>${d.budget.tetto} €</b></span></div>` : '<p class="muted">—</p>'}
+        <div class="kicker">Priorità</div><div class="dcats">${d.top3.map((id, i) => `<div class="dc">${icon(id, "xs")}<span>${i + 1}. ${esc(cat(id)?.nome)}</span></div>`).join("")}</div>
+        ${d.nonSacr ? `<div class="dc keep">${icon(d.nonSacr, "xs")}<span>Da non sacrificare: ${esc(cat(d.nonSacr)?.nome)}</span></div>` : ""}
+        <div class="dc dim"><span>Qui si risparmia: ${d.sacr.map(id => esc(cat(id)?.nome)).join(", ")}</span></div></div>
+      <div class="tile dbox">${d.follia ? `<div class="kicker">La follia scelta</div><p class="dfol">«${esc(d.follia)}»</p>` : ""}
+        <div class="kicker">Questioni aperte</div>${aperte.length ? `<ul>${aperte.map(x => `<li>${esc(x.domanda)} ${esc(x.a)} o ${esc(x.b)}?</li>`).join("")}</ul>` : '<p class="muted">Nessuna. Gruppo compatto.</p>'}</div>
+      <div class="tile dbox"><div class="kicker">Missioni · entro ${esc(G.scadenzaMissioni)}</div>${(d.missioni || []).map(x => { const m = G.missioni.find(y => y.id === x.m); return `<div class="dm">${icon(m.icona, "xs")}<b>${esc(m.nome)}</b><span>${x.pair.map(u => esc(P(u)?.name || "")).join(" e ")}</span></div>`; }).join("")}
+        <div class="kicker">Prossima serata</div><p><b>${esc(G.serate[1].titolo)}</b> · ${esc(G.serate[1].quando)}</p></div>
+    </div>
+    <div class="tile dbox dprof"><div class="kicker">Profilo di viaggio</div><div class="prof">${d.profilo.map(x => { const dd = dById(x.id); if (!dd) return ""; const tot = x.A + x.B; const pos = tot ? (x.B / tot) * 100 : 50;
+        return `<div class="pf ${x.label === "Spaccatura" ? "open" : ""}"><span class="pa ${x.winner === "A" ? "w" : ""}">${esc(dd.a)}</span><div class="slider"><i style="left:${pos}%"></i></div><span class="pb ${x.winner === "B" ? "w" : ""}">${esc(dd.b)}</span></div>`; }).join("")}</div></div>
+    </div>`;
+}
+function hostDNA() { return `<div class="slide">${dnaHTML(st().dna)}</div>`; }
+function hostFooterExtra() {
+  const s = st();
+  if (s.step === "dna") return `<span class="won-chip">✓ Tappa 1 conquistata</span><button class="btn ghost" data-act="dna-refresh">Ricalcola</button><button class="btn aur" data-act="download">Scarica l'immagine</button>`;
+  if ((s.step === "wyr" || s.step === "lampo") && s.sub === "result") { const list = s.step === "wyr" ? G.dilemmi : G.lampo; if (dres(list[s.k].id).label === "Spaccatura") return `<button class="btn red" data-act="rivota">Rivota</button>`; }
+  if (s.step === "lampo" && s.sub === "intro") return `<button class="btn aur" data-act="lampo-go">Via!</button>`;
+  return "";
+}
+function nextLabel() {
+  const s = st();
+  if (s.step === "chi" && s.sub === "guess" && !s.reveal) return "Svela";
+  if ((s.step === "wyr" || s.step === "lampo") && s.sub === "play") return "Risultato";
+  if (s.step === "punti" && s.sub === "collect") return "Svela la classifica";
+  if (s.step === "budget" && s.sub === "collect") return "Svela il budget";
+  if (s.step === "missioni" && s.sub === "carte") return "Travel DNA";
+  return "Avanti";
+}
+function renderHost() {
+  const s = st(); if (!s.step) return `<div class="center-msg">Preparo la stanza…</div>`;
+  const views = { lobby: hostLobby, briefing: hostBriefing, patto: hostPatto, chi: hostChi, wyr: () => hostDilemma(false), lampo: () => hostDilemma(true), punti: hostPunti, budget: hostBudget, missioni: hostMissioni, dna: hostDNA };
+  return `<div class="host">
+    <header class="hbar"><div class="brand">${esc(G.titolo)} <span>· Serata 1 · ${esc(G.serate[0].titolo)}</span></div><div class="phase">${esc(STEP_NAMES[s.step] || "")}</div>
+      <div class="room">${Store.mock ? '<span class="mock">modalità prova</span>' : ""}<span>Stanza <b>${CODE}</b></span><span>${nPlayers()} 👤</span><button class="mini" data-act="fullscreen" title="Schermo intero">⛶</button><button class="mini" data-act="newroom" title="Nuova stanza">⟲</button></div></header>
+    <main class="stage">${(views[s.step] || hostLobby)()}</main>
+    <footer class="hfoot"><button class="btn ghost" data-act="back" ${ui.history.length ? "" : "disabled"}>← Indietro</button><div class="fx">${hostFooterExtra()}</div>
+      ${s.step === "dna" ? "" : `<button class="btn aur big" data-act="next" ${canNext() ? "" : "disabled"}>${nextLabel()} →</button>`}</footer></div>`;
+}
+
+// ============================ TELEFONO ============================
+function phoneJoin() {
+  const taken = new Set(playerList().map(p => p.avatar));
+  const d = ui.drafts;
+  return `<div class="ph-wrap"><h1 class="ptitle">${esc(G.titolo)}</h1><p class="muted">Stanza ${CODE}</p>
+    <label class="lab">Come ti chiami?</label><input class="inp" id="f-name" maxlength="16" value="${esc(d.name || "")}" placeholder="Il tuo nome" autocomplete="off">
+    <label class="lab">Scegli il tuo animale</label><div class="avpick">${G.avatar.map(a => `<button class="avb ${d.avatar === a.id ? "sel" : ""}" data-act="pick-av" data-id="${a.id}" ${taken.has(a.id) ? "disabled" : ""}><img src="assets/${a.id}.png" alt=""><span>${esc(a.nome)}</span></button>`).join("")}</div>
+    <button class="btn aur full" data-act="join" ${d.name && d.avatar && !taken.has(d.avatar) ? "" : "disabled"}>Entra nella spedizione</button></div>`;
+}
+const watch = (t, sub = "") => `<div class="watch"><div class="eye">👀</div><h2>${esc(t)}</h2>${sub ? `<p class="muted">${sub}</p>` : ""}</div>`;
+const done = (t = "Fatto!", sub = "Aspetta gli altri.") => `<div class="watch"><div class="eye ok">✓</div><h2>${esc(t)}</h2><p class="muted">${esc(sub)}</p></div>`;
+function textQ(id, q, multi) {
+  const v = ui.drafts[id] || "";
+  return `<div class="ph-wrap"><h2 class="pq">${esc(q)}</h2>${multi ? `<textarea class="inp" id="f-${id}" maxlength="140" rows="3">${esc(v)}</textarea>` : `<input class="inp" id="f-${id}" maxlength="24" value="${esc(v)}" autocomplete="off">`}
+    <button class="btn aur full" data-act="send-text" data-id="${id}" ${v.trim() ? "" : "disabled"}>Invia</button></div>`;
+}
+function phoneLobby() {
+  if (mine("parola") === undefined) return textQ("parola", G.lobby.parola, false);
+  if (mine("follia") === undefined) return textQ("follia", G.lobby.follia, true) + `<p class="ph-note">Resta anonima: servirà per il primo gioco.</p>`;
+  return done("Sei dentro!", "Aspetta che entrino tutti.");
+}
+function phonePatto() {
+  if (mine("patto")) return done("Patto firmato", "Ora sei vincolato. Più o meno.");
+  return `<div class="ph-wrap"><h2 class="pq">Il patto della spedizione</h2><ol class="patto sm">${G.patto.map(r => `<li>${esc(r)}</li>`).join("")}</ol>
+    <button class="hold" id="hold"><span class="ring"></span><b>Tieni premuto per firmare</b></button></div>`;
+}
+function phoneChi() {
+  const s = st();
+  if (s.sub === "guess") {
+    const author = s.list[s.k]; const my = (ans("chi_" + author) || {})[ME];
+    if (s.reveal) {
+      if (author === ME) return done("Era la tua!", "Goditi lo svelamento.");
+      return my === author ? done("Indovinato! +1", `Era di ${P(author)?.name}.`) : `<div class="watch"><div class="eye">✗</div><h2>Era di ${esc(P(author)?.name)}</h2><p class="muted">Ti ha fregato.</p></div>`;
+    }
+    return `<div class="ph-wrap"><div class="tile quote sm">«${esc(ans("follia")[author])}»</div>
+      <h2 class="pq">${author === ME ? "È la tua! Vota qualcun altro per depistare." : "Chi l'ha scritta?"}</h2>
+      <div class="avgrid">${playerList().filter(p => p.id !== ME).map(p => `<button class="avb ${my === p.id ? "sel" : ""}" data-act="ans" data-key="chi_${author}" data-v="${p.id}">${av(p.id)}<span>${esc(p.name)}</span></button>`).join("")}</div></div>`;
+  }
+  if (s.sub === "vote") {
+    const my = mine("follia_vote");
+    return `<div class="ph-wrap"><h2 class="pq">Quale follia facciamo davvero?</h2><div class="list">${s.list.map(a => `<button class="opt-b ${my === a ? "sel" : ""}" data-act="ans" data-key="follia_vote" data-v="${a}">«${esc(ans("follia")[a])}»</button>`).join("")}</div></div>`;
+  }
+  return watch("La follia scelta è sullo schermo");
+}
+function phoneDilemma(lampo) {
+  const s = st(); const list = lampo ? G.lampo : G.dilemmi; const d = list[s.k];
+  if (lampo && s.sub === "intro") return watch("Giro lampo!", "10 secondi a dilemma. Tieniti pronto.");
+  const key = "v_" + d.id + (s.round === 2 ? "_2" : "");
+  if (s.sub === "result") {
+    const r = dres(d.id); const v = ans(key)[ME];
+    return `<div class="ph-wrap"><h2 class="pq">${esc(d.domanda)}</h2>${bar(r, false)}<div class="verdict v-${r.label.toLowerCase()}"><b>${r.label}</b></div>
+      <p class="muted">Hai votato: ${v === "A" ? esc(d.a) : v === "B" ? esc(d.b) : v === "T" ? "mi va bene tutto" : "niente"}</p></div>`;
+  }
+  const needBet = !lampo && s.round !== 2 && mine("bet_" + d.id) === undefined;
+  if (needBet) return `<div class="ph-wrap"><div class="kicker">${d.aurora ? "🌌 " : ""}${s.k + 1}/${list.length}</div><h2 class="pq">${esc(d.domanda)}</h2>
+    <p class="bet-q">Prima scommetti: cosa sceglierà il gruppo?</p>
+    <button class="opt-b oa" data-act="ans" data-key="bet_${d.id}" data-v="A"><span class="L">A</span>${esc(d.a)}</button>
+    <button class="opt-b ob" data-act="ans" data-key="bet_${d.id}" data-v="B"><span class="L">B</span>${esc(d.b)}</button></div>`;
+  const v = ans(key)[ME];
+  return `<div class="ph-wrap"><div class="kicker">${lampo ? "⚡ " : d.aurora ? "🌌 " : ""}${s.k + 1}/${list.length}${s.round === 2 ? " · Rivoto" : ""}</div><h2 class="pq">${esc(d.domanda)}</h2>
+    ${!lampo && s.round !== 2 ? `<p class="muted">Hai scommesso su ${mine("bet_" + d.id)}. Ora vota tu.</p>` : ""}
+    <button class="opt-b oa ${v === "A" ? "sel" : ""}" data-act="ans" data-key="${key}" data-v="A"><span class="L">A</span>${esc(d.a)}</button>
+    <button class="opt-b ob ${v === "B" ? "sel" : ""}" data-act="ans" data-key="${key}" data-v="B"><span class="L">B</span>${esc(d.b)}</button>
+    <button class="opt-b ot ${v === "T" ? "sel" : ""}" data-act="ans" data-key="${key}" data-v="T">Mi va bene tutto</button>
+    ${v ? '<p class="ph-note">Votato. Puoi cambiare finché non arriva il risultato.</p>' : ""}</div>`;
+}
+function phonePunti() {
+  const s = st();
+  if (s.sub !== "collect") return watch("La classifica è sullo schermo");
+  if (mine("punti") && !ui.editPunti) return `<div class="ph-wrap">${done("Punti inviati")}<button class="btn ghost full" data-act="edit-punti">Modifica</button></div>`;
+  if (!ui.drafts.punti) ui.drafts.punti = mine("punti") ? { ...mine("punti") } : Object.fromEntries(G.categorie.map(c => [c.id, 0]));
+  const a = ui.drafts.punti; const tot = Object.values(a).reduce((x, y) => x + (+y || 0), 0); const left = 100 - tot;
+  return `<div class="ph-wrap"><h2 class="pq">Hai 100 punti. Dove li metti?</h2>
+    <div class="left ${left === 0 ? "ok" : left < 0 ? "bad" : ""}">${left === 0 ? "Perfetto: 100 su 100" : left > 0 ? `Ne restano <b>${left}</b>` : `Sei oltre di ${-left}`}</div>
+    <div class="alloc">${G.categorie.map(c => `<div class="al">${icon(c.id, "xs")}<div class="al-t"><b>${esc(c.nome)}</b><small>${esc(c.desc)}</small></div>
+      <div class="stepper"><button data-act="pt" data-id="${c.id}" data-d="-5">−</button><span>${a[c.id] || 0}</span><button data-act="pt" data-id="${c.id}" data-d="5" ${left <= 0 ? "disabled" : ""}>+</button></div></div>`).join("")}</div>
+    <button class="btn aur full" data-act="send-punti" ${left === 0 ? "" : "disabled"}>Invia</button></div>`;
+}
+function phoneBudget() {
+  const s = st();
+  if (s.sub !== "collect") return watch(s.sub === "souvenir" ? "Souvenir sullo schermo" : "Il budget del gruppo è sullo schermo");
+  if ((ui.budgetSent || mine("spese")) && !ui.editBudget) return `<div class="ph-wrap">${done("Inviato", "Nessuno vedrà le tue cifre.")}<button class="btn ghost full" data-act="edit-budget">Modifica</button></div>`;
+  const d = ui.drafts; d.spend = d.spend || [];
+  const c = +d.comodo || 0, m = +d.max || 0;
+  const ok = c > 0 && m >= c && d.spend.length === 2 && d.save && (d.souvenir || "").trim();
+  return `<div class="ph-wrap"><h2 class="pq">Budget al buio</h2><p class="muted">Per tutta la settimana, voli esclusi: mezzo, benzina, alloggi, cibo, attività. Le cifre restano segrete.</p>
+    <label class="lab">Quanto spendi senza pensarci?</label><div class="eur"><input class="inp" id="f-comodo" type="number" inputmode="numeric" min="0" step="50" value="${esc(d.comodo || "")}" placeholder="es. 900"><span>€</span></div>
+    <label class="lab">Il limite oltre cui non vai</label><div class="eur"><input class="inp" id="f-max" type="number" inputmode="numeric" min="0" step="50" value="${esc(d.max || "")}" placeholder="es. 1200"><span>€</span></div>
+    ${m && c && m < c ? '<p class="warn">Il limite deve essere almeno quanto il comodo.</p>' : ""}
+    <label class="lab">Su cosa spenderesti volentieri? <small>(scegline 2)</small></label><div class="chips">${G.budget.voci.map(v => `<button class="chip ${d.spend.includes(v) ? "sel" : ""}" data-act="spend" data-v="${esc(v)}">${esc(v)}</button>`).join("")}</div>
+    <label class="lab">Su cosa risparmieresti? <small>(scegline 1)</small></label><div class="chips">${G.budget.voci.map(v => `<button class="chip save ${d.save === v ? "sel" : ""}" data-act="save" data-v="${esc(v)}" ${d.spend.includes(v) ? "disabled" : ""}>${esc(v)}</button>`).join("")}</div>
+    <label class="lab">${esc(G.budget.souvenir)}</label><input class="inp" id="f-souvenir" maxlength="60" value="${esc(d.souvenir || "")}" autocomplete="off">
+    <button class="btn aur full" data-act="send-budget" ${ok ? "" : "disabled"}>Invia</button></div>`;
+}
+function phoneMissioni() {
+  const s = st(); const pi = myPair();
+  if (s.sub === "coppie") {
+    if (!s.pairs) return watch(ME === s.gm ? "Sei il Game Master" : "Si formano le coppie…", ME === s.gm ? "Resti fuori dalle missioni." : "");
+    if (pi < 0) return watch("Sei il Game Master", "Resti fuori dalle missioni.");
+    const partner = s.pairs[pi].filter(u => u !== ME);
+    return `<div class="watch">${partner.map(u => av(u, "big")).join("")}<h2>Sei in coppia con ${partner.map(u => esc(P(u)?.name)).join(" e ")}</h2></div>`;
+  }
+  const dr = draft();
+  if (s.sub === "draft") {
+    if (pi < 0) return watch("Le coppie scelgono le missioni");
+    if (dr.assign[pi]) return done("Missione scelta", G.missioni.find(m => m.id === dr.assign[pi]).nome);
+    const myTurn = s.order[dr.turn] === pi;
+    if (!myTurn) { const pos = s.order.indexOf(pi); return watch(`Scegliete per ${pos + 1}ª`, "Aspettate il vostro turno."); }
+    return `<div class="ph-wrap"><h2 class="pq">Tocca a voi: scegliete la missione</h2>${G.missioni.map(m => `<button class="opt-b mis" data-act="pick" data-id="${m.id}" ${dr.taken && dr.taken[m.id] ? "disabled" : ""}>${icon(m.icona, "xs")}<b>${esc(m.nome)}</b><small>${esc(missionCard(m.id).obiettivo)}</small></button>`).join("")}</div>`;
+  }
+  if (pi < 0 || !dr.assign[pi]) return watch("Le missioni sono sullo schermo");
+  return `<div class="ph-wrap">${mcardHTML(dr.assign[pi], s.pairs[pi])}</div>`;
+}
+function phoneDNA() {
+  return `<div class="ph-wrap">${dnaHTML(st().dna)}<button class="btn aur full" data-act="download">Salva l'immagine</button></div>`;
+}
+function renderPhone() {
+  if (!Object.keys(S.state || {}).length && !P(ME)) { if (S._loaded) return `<div class="center-msg">Stanza ${esc(CODE)} non trovata.<br><small>Controlla il codice.</small></div>`; return `<div class="center-msg">Collegamento…</div>`; }
+  if (!P(ME)) return phoneJoin();
+  const s = st(); const pts = points()[ME] || 0;
+  const views = { lobby: phoneLobby, briefing: () => watch(G.briefing[s.sub]?.titolo || "Guarda lo schermo", "Ascolta il Game Master."), patto: phonePatto, chi: phoneChi, wyr: () => phoneDilemma(false), lampo: () => phoneDilemma(true), punti: phonePunti, budget: phoneBudget, missioni: phoneMissioni, dna: phoneDNA };
+  return `<div class="phone"><header class="phbar">${av(ME)}<b>${esc(P(ME).name)}</b><span class="pts">⚔ ${pts}</span></header>
+    <main>${(views[s.step] || phoneLobby)()}</main></div>`;
+}
+function phoneAction(act, el) {
+  const s = st(); const d = ui.drafts;
+  if (act === "pick-av") { d.avatar = el.dataset.id; return render(); }
+  if (act === "join") {
+    if (!d.name || !d.avatar) return;
+    if (playerList().some(p => p.avatar === d.avatar)) { d.avatar = null; return render(); }
+    return Store.set(R(`pub/players/${ME}`), { name: d.name.trim().slice(0, 16), avatar: d.avatar, joinedAt: Date.now() });
+  }
+  if (act === "send-text") { const id = el.dataset.id; const v = (d[id] || "").trim(); if (v) { ui.focus = null; answer(id, v); } return; }
+  if (act === "ans") return answer(el.dataset.key, el.dataset.v);
+  if (act === "pt") { const a = d.punti; const tot = Object.values(a).reduce((x, y) => x + y, 0); const delta = +el.dataset.d; const nv = (a[el.dataset.id] || 0) + delta; if (nv < 0 || (delta > 0 && tot >= 100)) return; a[el.dataset.id] = nv; return render(); }
+  if (act === "send-punti") { ui.editPunti = false; return answer("punti", d.punti); }
+  if (act === "edit-punti") { ui.editPunti = true; d.punti = { ...mine("punti") }; return render(); }
+  if (act === "spend") { const v = el.dataset.v; d.spend = d.spend || []; if (d.spend.includes(v)) d.spend = d.spend.filter(x => x !== v); else if (d.spend.length < 2) d.spend = [...d.spend, v]; else d.spend = [d.spend[1], v]; if (d.save === v) d.save = null; return render(); }
+  if (act === "save") { d.save = el.dataset.v; return render(); }
+  if (act === "send-budget") {
+    ui.budgetSent = true; ui.editBudget = false; ui.focus = null;
+    Store.set(R(`secret/${ME}`), { budget: { comodo: +d.comodo, max: +d.max } });
+    answer("spese", { spend: d.spend, save: d.save });
+    answer("souvenir", d.souvenir.trim());
+    return render();
+  }
+  if (act === "edit-budget") { ui.editBudget = true; return render(); }
+  if (act === "pick") { const pi = myPair(); if (pi < 0) return; return answer("pick_" + pi, { m: el.dataset.id, at: Date.now() }); }
+  if (act === "download") return downloadDNA();
+}
+
+// ============================ DNA IMMAGINE ============================
+function downloadDNA() {
+  const el = document.getElementById("dna"); if (!el || !window.html2canvas) return;
+  el.classList.add("shot");
+  html2canvas(el, { backgroundColor: "#1F2633", scale: 2, useCORS: true }).then(c => {
+    el.classList.remove("shot");
+    const a = document.createElement("a"); a.download = "travel-dna.png"; a.href = c.toDataURL("image/png"); document.body.appendChild(a); a.click(); a.remove();
+  }).catch(() => el.classList.remove("shot"));
+}
+
+// ============================ RENDER ============================
+let lastHTML = "";
+function render() {
+  const html = IS_HOST ? renderHost() : renderPhone();
+  if (html === lastHTML) return;
+  const fid = document.activeElement && document.activeElement.id;
+  const sel = fid && document.activeElement.selectionStart;
+  app.innerHTML = html; lastHTML = html;
+  if (fid) { const el = document.getElementById(fid); if (el) { el.focus(); try { el.setSelectionRange(sel, sel); } catch (e) {} } }
+  bindHold();
+}
+function tick() {
+  document.querySelectorAll(".timer").forEach(t => {
+    const t0 = +t.dataset.t0, dur = +t.dataset.dur * 1000; const left = Math.max(0, 1 - (Date.now() - t0) / dur);
+    t.firstElementChild.style.width = left * 100 + "%"; t.classList.toggle("end", left === 0);
+  });
+  requestAnimationFrame(tick);
+}
+function bindHold() {
+  const h = document.getElementById("hold"); if (!h) return;
+  const start = e => { e.preventDefault(); h.classList.add("on"); ui.hold = setTimeout(() => { h.classList.add("signed"); if (navigator.vibrate) navigator.vibrate(60); answer("patto", Date.now()); }, 1300); };
+  const stop = () => { h.classList.remove("on"); clearTimeout(ui.hold); };
+  h.addEventListener("pointerdown", start); h.addEventListener("pointerup", stop); h.addEventListener("pointerleave", stop); h.addEventListener("pointercancel", stop);
+  h.addEventListener("contextmenu", e => e.preventDefault());
+}
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-act]"); if (!el || el.disabled) return;
+  const act = el.dataset.act;
+  if (act === "host-start") { location.search = "?host"; return; }
+  if (act === "code-go") { const c = (document.getElementById("f-code").value || "").toUpperCase().trim(); if (c) location.search = "?r=" + c; return; }
+  IS_HOST ? hostAction(act, el) : phoneAction(act, el);
+});
+document.addEventListener("input", e => {
+  const id = e.target.id; if (!id || !id.startsWith("f-")) return;
+  const k = id.slice(2); ui.drafts[k] = e.target.value;
+  if (!IS_HOST) {
+    const html = renderPhone();
+    if (html !== lastHTML) { // aggiorna solo i pulsanti senza perdere il focus
+      const tmp = document.createElement("div"); tmp.innerHTML = html;
+      document.querySelectorAll("button[data-act]").forEach((b, i) => { const nb = tmp.querySelectorAll("button[data-act]")[i]; if (nb) b.disabled = nb.disabled; });
+      const w = document.querySelector(".warn"), nw = tmp.querySelector(".warn");
+      if (!!w !== !!nw) { lastHTML = ""; render(); }
+    }
+  }
+});
+document.addEventListener("keydown", e => {
+  if (!IS_HOST || e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") { e.preventDefault(); next(); }
+  if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); back(); }
+});
+
+function landing() {
+  app.innerHTML = `<div class="landing"><img class="lg-av" src="assets/pulcinella.png" alt=""><h1 class="ptitle">${esc(G.titolo)}</h1>
+    <p class="muted">Inserisci il codice della stanza</p><input class="inp code-in" id="f-code" maxlength="6" autocomplete="off" placeholder="CODICE">
+    <button class="btn aur full" data-act="code-go">Entra</button><button class="btn ghost full" data-act="host-start">Sono il Game Master</button></div>`;
+}
+
+// ============================ AVVIO ============================
+async function start() {
+  if (!IS_HOST && !CODE) return landing();
+  try { await Store.init(); } catch (e) { app.innerHTML = `<div class="center-msg">Non riesco a collegarmi.<br><small>${esc(e.message || e)}</small></div>`; return; }
+  ME = Store.uid;
+  if (IS_HOST) {
+    document.documentElement.classList.add("is-host");
+    CODE = localStorage.getItem("ip-host-code") || "";
+    if (CODE) { const h = await Store.get(R("host")); if (h && h !== ME) CODE = ""; }
+    if (!CODE) {
+      const L = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+      CODE = Array.from({ length: 4 }, () => L[rnd(L.length)]).join("");
+      await Store.set(R("host"), ME);
+      localStorage.setItem("ip-host-code", CODE);
+    }
+    const cur = await Store.get(R("pub/state"));
+    if (!cur) await Store.set(R("pub/state"), { step: "lobby", sub: 0, k: 0, t0: Date.now() });
+    Store.on(R("secret"), v => { SECRET = v || {}; render(); });
+  } else {
+    document.documentElement.classList.add("is-phone");
+  }
+  Store.on(R("pub"), v => { S = v || {}; S.state = S.state || {}; S._loaded = true; render(); });
+  render(); tick();
+}
+start();
+})();
