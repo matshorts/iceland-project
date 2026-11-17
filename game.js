@@ -316,7 +316,7 @@ function canNext() {
 function next() {
   const s = st(); if (!canNext()) return;
   switch (s.step) {
-    case "intro": return go("lobby");
+    case "intro": return s.sub ? go("lobby") : setState({ sub: 1 });
     case "lobby": return go("briefing");
     case "briefing": return s.sub < G.briefing.length - 1 ? setState({ sub: s.sub + 1 }) : go("patto");
     case "patto": { const list = chiList(); return list.length ? go("chi", { sub: "guess", list }) : go("wyr", { sub: "intro" }); }
@@ -606,15 +606,22 @@ function nextLabel() {
   return "Avanti";
 }
 function hostIntro() {
+  const s0 = st(); const key = CODE + "|" + s0.sub + "|" + s0.t0;
+  if (ui.introKey === key) return ui.introHTML;
+  const e = Math.max(0, (Date.now() - (s0.t0 || Date.now())) / 1000).toFixed(2);
+  const go = !!s0.sub;
   const t = String(G.titolo || "The Iceland Project");
   const letters = [...t].map((ch, i) => ch === " " ? '<span class="sp">&nbsp;</span>' : `<span class="ch" style="animation-delay:${0.6 + i * 0.07}s">${esc(ch)}</span>`).join("");
   const stars = Array.from({ length: 28 }, (_, i) => `<i class="star" style="left:${(i * 37) % 100}%;top:${(i * 53) % 55}%;animation-delay:${(i % 7) * 0.6}s"></i>`).join("");
   const avs = G.avatar.map((a, i) => `<img class="iav" src="assets/${esc(a.id)}.png" alt="" style="animation-delay:${2.6 + i * 0.18}s">`).join("");
   const sub = G.intro || {};
-  return `<div class="intro" data-act="next">
-    <div class="i-bg"></div><div class="i-aur a1"></div><div class="i-aur a2"></div><div class="i-aur a3"></div>${stars}
+  const bg = go ? `style="animation-delay:-${e}s"` : "";
+  const aurs = [0, -6, -3].map((o, i) => `<div class="i-aur a${i + 1}" ${go ? `style="animation-delay:${(o - e).toFixed(2)}s"` : ""}></div>`).join("");
+  ui.introKey = key;
+  return ui.introHTML = `<div class="intro ${go ? "go" : "calm"}" data-act="next">
+    <div class="i-bg" ${bg}></div>${aurs}${stars}
     <div class="i-corner"><button class="mini" data-act="fullscreen" title="Schermo intero">⛶</button>${DEMO ? "" : '<button class="mini" data-act="newroom" title="Nuova stanza">⟲</button>'}</div>
-    <div class="i-box">
+    ${go ? `<div class="i-box">
       <div class="i-kick">${esc(sub.sopra || "7 vichinghi · 1 isola · 4 serate")}</div>
       <h1 class="i-title">${letters}</h1>
       <div class="i-sub">${esc(sub.sotto || "Road trip d'inverno · 17–24 febbraio 2027")}</div>
@@ -622,7 +629,7 @@ function hostIntro() {
       <div class="i-cl">all'atterraggio in Islanda</div>
       <div class="i-avs">${avs}</div>
       <div class="i-start">Premi per iniziare la spedizione →</div>
-    </div></div>`;
+    </div>` : ""}</div>`;
 }
 function tickCountdown() {
   const d = document.getElementById("cd-d"); if (!d) return;

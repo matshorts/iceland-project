@@ -311,6 +311,9 @@ details > .btn{margin:6px 0 14px}
 .i-start{margin-top:2.4rem;font-family:"Lilita One";font-size:2.6rem;color:#0f2a20;background:var(--aur);padding:.5em 1.4em;border-radius:14px;box-shadow:0 .5rem 0 #1f7a55,0 0 3rem rgba(75,227,160,.45);opacity:0;animation:up .8s 4.2s forwards,pulse 1.8s 5s ease-in-out infinite}
 @keyframes pulse{50%{transform:scale(1.06);box-shadow:0 .5rem 0 #1f7a55,0 0 5rem rgba(75,227,160,.75)}}
 .i-corner{position:absolute;top:1.6rem;right:2.4rem;z-index:3;display:flex;gap:1.2rem;font-size:1.6rem;opacity:.35}.i-corner:hover{opacity:1}
+.intro.go .i-bg{opacity:1;animation:kb 40s ease-in-out infinite alternate}
+.intro.go .i-aur{opacity:1;animation-name:aur;animation-timing-function:ease-in-out;animation-iteration-count:infinite;animation-direction:alternate}
+.intro.go .i-aur.a1{animation-duration:14s}.intro.go .i-aur.a2{animation-duration:19s}.intro.go .i-aur.a3{animation-duration:23s}
 .duo-host .intro{height:100%}
 
 /* ================= SIMULAZIONE GIOCATORE (telefono + schermo) ================= */
@@ -337,7 +340,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="assets/vendor/firebase-app-compat.js"></script>
 <script src="assets/vendor/firebase-auth-compat.js"></script>
 <script src="assets/vendor/firebase-database-compat.js"></script>
-<script src="config.js?v=7"></script>
-<script src="game.js?v=7"></script>
+<script src="config.js?v=8"></script>
+<script src="game.js?v=8"></script>
 </body>
 </html>
