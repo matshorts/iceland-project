@@ -19,8 +19,15 @@ window.GAME = {
   titolo: "The Iceland Project",
   giocatoriAttesi: 7,
 
+  // Schermata iniziale (prima del QR)
+  intro: {
+    sopra: "7 vichinghi · 1 isola · 4 serate",
+    sotto: "Road trip d'inverno · 17–24 febbraio 2027",
+    partenza: "2027-02-17T18:00:00Z"   // atterraggio a Keflavík (ora islandese = UTC)
+  },
+
   serate: [
-    { n: 1, titolo: "The Travel DNA", quando: "Martedì 10 novembre", cosa: "Budget, priorità e stile di viaggio" },
+    { n: 1, titolo: "The Travel DNA", quando: "Martedì 17 novembre", cosa: "Budget, priorità e stile di viaggio" },
     { n: 2, titolo: "The Great Iceland Draft", quando: "Data da fissare", cosa: "Tappe, itinerario e mezzo. Poi si prenota" },
     { n: 3, titolo: "The Road Trip Deal", quando: "Inizio dicembre", cosa: "Attività, cassa comune, turni di guida" },
     { n: 4, titolo: "The Final Expedition", quando: "Fine gennaio", cosa: "Checklist, imprevisti, ruoli in viaggio" }

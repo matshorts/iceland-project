@@ -276,6 +276,43 @@ details > .btn{margin:6px 0 14px}
 .sc.sel{border-color:var(--aur);background:rgba(75,227,160,.12)}
 .davv{display:flex;flex-direction:column;gap:.25rem}.davv div{display:flex;justify-content:space-between;gap:1rem}.davv span{color:var(--mute)}.davv b{text-align:right}
 
+
+/* ================= SCHERMATA INIZIALE ================= */
+.intro{position:relative;height:100%;min-height:100%;overflow:hidden;cursor:pointer;display:grid;place-items:center;background:#0d121b}
+.is-host .intro{height:100vh}
+.i-bg{position:absolute;inset:-4%;background:url(assets/sfondo.jpg) center 30%/cover no-repeat;animation:kb 40s ease-in-out infinite alternate;opacity:0;animation-name:kb,fadein;animation-duration:40s,2.2s;animation-iteration-count:infinite,1;animation-direction:alternate,normal;animation-fill-mode:none,forwards}
+.i-bg::after{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 50% 55%,rgba(13,18,27,.35),rgba(13,18,27,.85) 75%)}
+@keyframes kb{from{transform:scale(1) translateX(0)}to{transform:scale(1.12) translateX(-2%)}}
+@keyframes fadein{to{opacity:1}}
+.i-aur{position:absolute;left:-20%;width:140%;height:26%;border-radius:50%;filter:blur(4rem);mix-blend-mode:screen;opacity:.0;animation:aur 14s ease-in-out infinite alternate,fadein 3s 1s forwards}
+.i-aur.a1{top:2%;background:linear-gradient(90deg,transparent,rgba(75,227,160,.55),rgba(63,183,176,.45),transparent)}
+.i-aur.a2{top:14%;background:linear-gradient(90deg,transparent,rgba(63,183,176,.4),rgba(75,227,160,.5),transparent);animation-duration:19s,3s;animation-delay:-6s,1.6s}
+.i-aur.a3{top:-6%;background:linear-gradient(90deg,transparent,rgba(140,110,230,.25),rgba(75,227,160,.3),transparent);animation-duration:23s,3s;animation-delay:-3s,2.2s}
+@keyframes aur{0%{transform:translateX(-8%) skewY(-4deg) scaleY(.8)}50%{transform:translateX(4%) skewY(3deg) scaleY(1.15)}100%{transform:translateX(10%) skewY(-2deg) scaleY(.9)}}
+.star{position:absolute;width:.35rem;height:.35rem;border-radius:50%;background:#fff;opacity:.2;animation:tw 4s ease-in-out infinite}
+@keyframes tw{50%{opacity:.9;transform:scale(1.6)}}
+.i-box{position:relative;z-index:2;text-align:center;display:flex;flex-direction:column;align-items:center;gap:1.6rem;padding:0 4rem}
+.i-kick{font-family:"Lilita One";letter-spacing:.35em;text-transform:uppercase;color:var(--gold);font-size:2rem;opacity:0;animation:up .9s .2s forwards}
+.i-title{font-family:"Lilita One";font-weight:400;font-size:11rem;line-height:1;letter-spacing:.02em;color:var(--ink);text-shadow:0 .6rem 0 rgba(0,0,0,.45),0 0 4rem rgba(75,227,160,.35);white-space:nowrap}
+.i-title .ch{display:inline-block;opacity:0;transform:translateY(3rem) scale(.6);animation:letter .55s cubic-bezier(.2,1.5,.4,1) forwards}
+.i-title .sp{display:inline-block;width:.35em}
+@keyframes letter{to{opacity:1;transform:none}}
+.i-sub{font-size:2.6rem;font-weight:800;color:var(--ink);opacity:0;animation:up .8s 2s forwards}
+@keyframes up{from{opacity:0;transform:translateY(1.5rem)}to{opacity:1;transform:none}}
+.i-count{display:flex;align-items:baseline;gap:.8rem;margin-top:1.4rem;opacity:0;animation:up .8s 2.3s forwards}
+.cd-n{font-family:"Lilita One";font-size:6rem;color:var(--aur);min-width:2ch;text-align:right;text-shadow:0 0 2.4rem rgba(75,227,160,.45);font-variant-numeric:tabular-nums}
+.cd-l{font-size:1.8rem;color:var(--mute);margin-right:1.6rem;font-weight:800}
+.i-cl{font-size:1.7rem;color:var(--mute);margin-top:-1rem;opacity:0;animation:up .8s 2.4s forwards}
+.i-avs{display:flex;gap:1.4rem;margin-top:1.6rem}
+.iav{width:9rem;height:9rem;opacity:0;animation:drop .6s cubic-bezier(.2,1.6,.4,1) forwards,bob 3s ease-in-out infinite}
+.iav:nth-child(odd){animation-duration:.6s,3.4s}
+@keyframes drop{from{opacity:0;transform:translateY(-4rem) scale(.4) rotate(-12deg)}to{opacity:1;transform:none}}
+@keyframes bob{50%{translate:0 -.6rem}}
+.i-start{margin-top:2.4rem;font-family:"Lilita One";font-size:2.6rem;color:#0f2a20;background:var(--aur);padding:.5em 1.4em;border-radius:14px;box-shadow:0 .5rem 0 #1f7a55,0 0 3rem rgba(75,227,160,.45);opacity:0;animation:up .8s 4.2s forwards,pulse 1.8s 5s ease-in-out infinite}
+@keyframes pulse{50%{transform:scale(1.06);box-shadow:0 .5rem 0 #1f7a55,0 0 5rem rgba(75,227,160,.75)}}
+.i-corner{position:absolute;top:1.6rem;right:2.4rem;z-index:3;display:flex;gap:1.2rem;font-size:1.6rem;opacity:.35}.i-corner:hover{opacity:1}
+.duo-host .intro{height:100%}
+
 /* ================= SIMULAZIONE GIOCATORE (telefono + schermo) ================= */
 html.is-duo{font-size:min(calc((100vw - 470px) / 120), calc((100vh - 24px) / 67.5))}
 html.is-duo body{overflow:hidden}
@@ -300,7 +337,7 @@ a.btn{text-decoration:none;color:inherit}
 <script src="assets/vendor/firebase-app-compat.js"></script>
 <script src="assets/vendor/firebase-auth-compat.js"></script>
 <script src="assets/vendor/firebase-database-compat.js"></script>
-<script src="config.js?v=5"></script>
-<script src="game.js?v=5"></script>
+<script src="config.js?v=6"></script>
+<script src="game.js?v=6"></script>
 </body>
 </html>

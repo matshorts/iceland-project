@@ -2,7 +2,7 @@
 "use strict";
 const DEFAULTS = JSON.parse(JSON.stringify(window.GAME));
 let G = JSON.parse(JSON.stringify(DEFAULTS));
-const EDITABLE = ["serate", "lobby", "esempi", "briefing", "patto", "dilemmi", "lampo", "categorie", "avventura", "budget", "missioni", "scadenzaMissioni", "nomi"];
+const EDITABLE = ["intro", "serate", "lobby", "esempi", "briefing", "patto", "dilemmi", "lampo", "categorie", "avventura", "budget", "missioni", "scadenzaMissioni", "nomi"];
 const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
 let cfgKey = "";
 function applyCfg(c) {
@@ -297,7 +297,7 @@ function computeDNA() {
 }
 
 // ============================ HOST: FLUSSO ============================
-const STEP_NAMES = { lobby: "Lobby", briefing: "Il briefing", patto: "Il patto", chi: "Chi l'ha detto?", wyr: "Would you rather", lampo: "Giro lampo", punti: "I 100 punti", avventura: "Il termometro", budget: "Budget al buio", missioni: "Le missioni", dna: "Il Travel DNA" };
+const STEP_NAMES = { intro: "", lobby: "Lobby", briefing: "Il briefing", patto: "Il patto", chi: "Chi l'ha detto?", wyr: "Would you rather", lampo: "Giro lampo", punti: "I 100 punti", avventura: "Il termometro", budget: "Budget al buio", missioni: "Le missioni", dna: "Il Travel DNA" };
 function setState(patch, push = true) {
   if (push) ui.history.push(JSON.stringify(st()));
   const ns = { ...st(), ...patch };
@@ -316,6 +316,7 @@ function canNext() {
 function next() {
   const s = st(); if (!canNext()) return;
   switch (s.step) {
+    case "intro": return go("lobby");
     case "lobby": return go("briefing");
     case "briefing": return s.sub < G.briefing.length - 1 ? setState({ sub: s.sub + 1 }) : go("patto");
     case "patto": { const list = chiList(); return list.length ? go("chi", { sub: "guess", list }) : go("wyr", { sub: "intro" }); }
@@ -604,8 +605,35 @@ function nextLabel() {
   if (s.step === "missioni" && s.sub === "carte") return "Travel DNA";
   return "Avanti";
 }
+function hostIntro() {
+  const t = String(G.titolo || "The Iceland Project");
+  const letters = [...t].map((ch, i) => ch === " " ? '<span class="sp"> </span>' : `<span class="ch" style="animation-delay:${0.6 + i * 0.07}s">${esc(ch)}</span>`).join("");
+  const stars = Array.from({ length: 28 }, (_, i) => `<i class="star" style="left:${(i * 37) % 100}%;top:${(i * 53) % 55}%;animation-delay:${(i % 7) * 0.6}s"></i>`).join("");
+  const avs = G.avatar.map((a, i) => `<img class="iav" src="assets/${esc(a.id)}.png" alt="" style="animation-delay:${2.6 + i * 0.18}s">`).join("");
+  const sub = G.intro || {};
+  return `<div class="intro" data-act="next">
+    <div class="i-bg"></div><div class="i-aur a1"></div><div class="i-aur a2"></div><div class="i-aur a3"></div>${stars}
+    <div class="i-corner"><button class="mini" data-act="fullscreen" title="Schermo intero">⛶</button>${DEMO ? "" : '<button class="mini" data-act="newroom" title="Nuova stanza">⟲</button>'}</div>
+    <div class="i-box">
+      <div class="i-kick">${esc(sub.sopra || "7 vichinghi · 1 isola · 4 serate")}</div>
+      <h1 class="i-title">${letters}</h1>
+      <div class="i-sub">${esc(sub.sotto || "Road trip d'inverno · 17–24 febbraio 2027")}</div>
+      <div class="i-count"><span class="cd-n" id="cd-d">--</span><span class="cd-l">giorni</span><span class="cd-n" id="cd-h">--</span><span class="cd-l">ore</span><span class="cd-n" id="cd-m">--</span><span class="cd-l">min</span><span class="cd-n" id="cd-s">--</span><span class="cd-l">sec</span></div>
+      <div class="i-cl">all'atterraggio in Islanda</div>
+      <div class="i-avs">${avs}</div>
+      <div class="i-start">Premi per iniziare la spedizione →</div>
+    </div></div>`;
+}
+function tickCountdown() {
+  const d = document.getElementById("cd-d"); if (!d) return;
+  const target = new Date((G.intro && G.intro.partenza) || "2027-02-17T18:00:00Z").getTime();
+  let x = Math.max(0, Math.floor((target - Date.now()) / 1000));
+  const vals = [Math.floor(x / 86400), Math.floor(x % 86400 / 3600), Math.floor(x % 3600 / 60), x % 60];
+  ["cd-d", "cd-h", "cd-m", "cd-s"].forEach((id, i) => { const el = document.getElementById(id); const v = i ? String(vals[i]).padStart(2, "0") : String(vals[i]); if (el && el.textContent !== v) el.textContent = v; });
+}
 function renderHost() {
   const s = st(); if (!s.step) return `<div class="center-msg">Preparo la stanza…</div>`;
+  if (s.step === "intro") return hostIntro();
   const views = { lobby: hostLobby, briefing: hostBriefing, patto: hostPatto, chi: hostChi, wyr: () => hostDilemma(false), lampo: () => hostDilemma(true), punti: hostPunti, avventura: hostAvv, budget: hostBudget, missioni: hostMissioni, dna: hostDNA };
   return `<div class="host">
     <header class="hbar"><div class="brand">${esc(G.titolo)} <span>· Serata 1 · ${esc(G.serate[0].titolo)}</span></div><div class="phase">${esc(STEP_NAMES[s.step] || "")}</div>
@@ -904,6 +932,7 @@ const LINKED = { D1: "decide il mezzo nella missione", D4: "decide l'alloggio ne
 const NOMI_LABEL = { cacciatori: "Aurora in top 3 + sveglia per tutti", notturni: "Aurora in top 3 + cottage isolato", terme: "Terme in top 3", mattinieri: "Sveglia alle 7 + più posti", lowcost: "Budget basso + cucinare insieme", avventurieri: "Fatica e adrenalina alte (termometro)", comodi: "Tutti gli altri casi" };
 const newId = () => "X" + Date.now().toString(36) + rnd(1000);
 const ADMIN_SCHEMA = [
+  { key: "intro", title: "Schermata iniziale", kind: "obj", fields: () => [["sopra", "Riga sopra il titolo"], ["sotto", "Riga sotto il titolo"]] },
   { key: "serate", title: "Le 4 serate", kind: "list", fixed: true, item: i => `Serata ${i + 1}`, fields: () => [["titolo", "Titolo"], ["quando", "Quando"], ["cosa", "Cosa si decide"]] },
   { key: "lobby", title: "Lobby: le due domande d'ingresso", kind: "obj", fields: () => [["parola", "Domanda «in una parola»"], ["follia", "Domanda nascosta (per «Chi l'ha detto?»)"]] },
   { key: "esempi", title: "Spunti per le domande aperte", hint: "Uno per riga. Compaiono sullo schermo del Game Master; il primo anche come esempio in grigio sul telefono.", kind: "obj", fields: () => [["parola", "Spunti: in una parola", "lines"], ["follia", "Spunti: la cosa più folle", "lines"], ["souvenir", "Spunti: souvenir inutili", "lines"]] },
@@ -1026,6 +1055,7 @@ function render() {
   bindHold();
 }
 function tick() {
+  tickCountdown();
   document.querySelectorAll(".timer").forEach(t => {
     const t0 = +t.dataset.t0, dur = +t.dataset.dur * 1000; const left = Math.max(0, 1 - (Date.now() - t0) / dur);
     t.firstElementChild.style.width = left * 100 + "%"; t.classList.toggle("end", left === 0);
@@ -1091,7 +1121,7 @@ async function start() {
     const saved = await loadSavedCfg();
     await Store.set(R("host"), ME);
     if (saved) await Store.set(R("pub/cfg"), saved);
-    await Store.set(R("pub/state"), { step: "lobby", sub: 0, k: 0, t0: Date.now() });
+    await Store.set(R("pub/state"), { step: "intro", sub: 0, k: 0, t0: Date.now() });
     Store.on(R("secret"), v => { SECRET = v || {}; render(); });
     Store.on(R("pub"), v => { S = v || {}; S.state = S.state || {}; S._loaded = true; applyCfg(S.cfg); render(); Bots.tick(); });
     Bots.start();
@@ -1111,7 +1141,7 @@ async function start() {
       if (saved) await Store.set(R("pub/cfg"), saved);
     }
     const cur = await Store.get(R("pub/state"));
-    if (!cur) await Store.set(R("pub/state"), { step: "lobby", sub: 0, k: 0, t0: Date.now() });
+    if (!cur) await Store.set(R("pub/state"), { step: "intro", sub: 0, k: 0, t0: Date.now() });
     Store.on(R("secret"), v => { SECRET = v || {}; render(); });
   } else {
     document.documentElement.classList.add("is-phone");
