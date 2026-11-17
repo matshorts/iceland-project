@@ -607,7 +607,7 @@ function nextLabel() {
 }
 function hostIntro() {
   const t = String(G.titolo || "The Iceland Project");
-  const letters = [...t].map((ch, i) => ch === " " ? '<span class="sp"> </span>' : `<span class="ch" style="animation-delay:${0.6 + i * 0.07}s">${esc(ch)}</span>`).join("");
+  const letters = [...t].map((ch, i) => ch === " " ? '<span class="sp">&nbsp;</span>' : `<span class="ch" style="animation-delay:${0.6 + i * 0.07}s">${esc(ch)}</span>`).join("");
   const stars = Array.from({ length: 28 }, (_, i) => `<i class="star" style="left:${(i * 37) % 100}%;top:${(i * 53) % 55}%;animation-delay:${(i % 7) * 0.6}s"></i>`).join("");
   const avs = G.avatar.map((a, i) => `<img class="iav" src="assets/${esc(a.id)}.png" alt="" style="animation-delay:${2.6 + i * 0.18}s">`).join("");
   const sub = G.intro || {};
